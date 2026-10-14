@@ -1300,3 +1300,10 @@ def test_r11_refuse_passes_unmapped_codes_through_unchanged():
     p = env(role="patient")
     assert p._refuse("ERR:zzz_unmapped") == {"accepted": False, "reason": "ERR:zzz_unmapped"}
     assert p._refuse(msg("RF-NOT-YOURS")) == {"accepted": False, "reason": msg("RF-NOT-YOURS")}
+
+def test_t2_agent_on_unapproved_clinician_form_gets_audience_line():
+    e = env(PP, "patient_agent", approve=None)
+    for a in (ans("site_marked", True), act("submit"), act("confirm", e.ids[0])):
+        assert e.step(a) == {"accepted": False, "reason": msg("RF-AGENT-CLIN-FORM")} and e.log == []
+    p = env(PH, "patient_agent", approve=None)
+    assert p.step(ans(p.ids[0], True))["reason"] == msg("RF-NOT-APPROVED")

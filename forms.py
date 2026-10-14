@@ -414,6 +414,8 @@ class FormEnv:
             datetime.datetime.fromisoformat(e["timestamp"])
         except (TypeError, ValueError):
             return code("timestamp")
+        if s.role == "patient_agent" and self.schema["audience"] != "patient":
+            return msg("RF-AGENT-CLIN-FORM")     # the audience bars the agent whatever state the form is in
         st, meta = self._fold()
         if t == "approve":
             return code("already_approved") if meta["approver"] is not None else None
