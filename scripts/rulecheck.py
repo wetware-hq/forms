@@ -3,7 +3,7 @@
 prose string literals (user-facing text must come from messages.LINES), or (c) msg() uses an
 id that is not in the signed wording table, or (d) a messages.LINES entry or a RULES.md W- row
 differs from the signed table WORDING.md. WORDING.md is the only wording source. Exit 0 otherwise."""
-import ast, pathlib, re, sys
+import ast, hashlib, pathlib, re, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -11,11 +11,32 @@ import messages
 
 
 def signed_table():
-    rows = re.findall(r"^\| ([A-Z]{2}-[A-Z0-9-]+) \| (.*) \|$", (ROOT / "WORDING.md").read_text(), re.M)
-    return dict(rows)
+    """Signed rows of WORDING.md (two columns). WORDING.md is the only wording source rulecheck reads."""
+    body = (ROOT / "WORDING.md").read_text().split("\n\n", 1)[1]
+    return dict(re.findall(r"^\| ([A-Z]{2,4}-[A-Z0-9-]+) \| ([^|]*?) \|$", body, re.M))
 
 
 SIGNED = signed_table()
+
+
+def signed_problems():
+    out = []
+    head, body = (ROOT / "WORDING.md").read_text().split("\n\n", 1)
+    if f"sha256: {hashlib.sha256(body.encode()).hexdigest()}" not in head:
+        out.append("WORDING.md: content does not match its header hash; regenerate with scripts/sync_wording.py")
+    for line in (ROOT / "RULES.md").read_text().splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 6 and cells[0].startswith("W-"):
+            k = cells[0][2:]
+            if k in messages.PENDING and k not in SIGNED:
+                if cells[1] != messages.PENDING[k] or "pending signature" not in cells[2]:
+                    out.append(f"RULES.md: {cells[0]} must match the pending line and be marked pending signature")
+                continue
+            if SIGNED.get(k) != cells[1]:
+                out.append(f"RULES.md: {cells[0]} not word for word as signed")
+            if "signed" not in cells[2] or "unsigned" in cells[2]:
+                out.append(f"RULES.md: {cells[0]} not marked signed")
+    return out
 
 
 def pending_report():

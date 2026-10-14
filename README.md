@@ -10,9 +10,12 @@ forms runs yes/no questionnaires as an agentic environment. It works in any clin
 
 ## Model
 
-- **Items.** A form is a versioned list of questions in TOML: `form_id`, `version`, `audience` (patient or clinician) and ordered `[[question]]` entries with `id`, `version`, `text`, `alert_answer`, `safety_critical` and `clinician_must_confirm`. Optional fields: `ask_if` (the only way to skip a question), `disciplines` (who may confirm a safety-critical question) and `two_item_ok`.
+- **Items.** A form is a versioned list of questions in TOML: `form_id`, `version`, `audience` (patient or clinician) and ordered `[[question]]` entries with `id`, `version`, `text`, `alert_answer`, `safety_critical` and `clinician_must_confirm`. Optional fields: `ask_if` (the only way to skip a question), `disciplines` (who may confirm a safety-critical question), `alert_route` (safety-critical questions only), `sensitive` (listed by export; queue lines never quote it) and `two_item_ok`.
 - **Log.** An append-only JSONL event log. Status, bitsets and flags are rebuilt by replaying the log. Every line is checked again on replay. Bitsets are only a fast view of that state.
 - **Build checks.** Questions worded as negatives are refused, and so are questions joining two items with "and", "or", a comma or a slash. A question marked `two_item_ok` goes to a clinician queue file instead.
+- **Follow-up questions.** A question with `ask_if` waits while its parent is blank (listed in the clinician queue). It must be answered when the parent is answered yes, declined or not yet confirmed. It is skipped only when the parent is answered no.
+- **Same-day queue.** On a safety-critical question, a yes (the alert answer), a decline, or an answer still unknown at a submission opens a same-day entry in the clinician queue, naming the question and event and a status from a signed list. The form cannot pass until a clinician reviews it (`review` closes all entries) or closes the entry with `close_sameday` and one of the signed statuses. If the patient later changes the answer to no, the entry stays (status: patient changed answer) until reviewed. The patient is told someone will contact them today for a confirmed yes, a decline or an unknown.
+- **Alert routes.** A safety-critical question may set `alert_route` to `same_day` (the default) or `before_procedure`. A before-procedure question uses its own queue entry, with the same statuses, and tells the patient the care team will check the question with them before any treatment or procedure.
 - **Approval.** Nothing can be filled in until a clinician approves that exact version. Any edit needs a fresh approval, and the approval view shows only what changed.
 
 ## Roles
@@ -21,8 +24,8 @@ There are four roles, fixed when a session opens. Anyone else is refused. Permis
 
 | Role | May |
 |---|---|
-| `patient` | answer, decline, confirm, grant and revoke their assistant's access (patient forms only) |
-| `patient_agent` | answer; never final until the patient confirms |
+| `patient` | answer, decline, confirm, grant and revoke access for a named assistant (`--agent`; patient forms only) |
+| `patient_agent` | answer, only with a grant naming its own id; never final until the patient confirms |
 | `clinician` (with `--discipline`, e.g. medicine, nursing, physiotherapy, pharmacy) | answer, confirm, approve |
 | `clinician_agent` (with `--scope`) | answer; never final until a clinician confirms in their own session |
 
@@ -44,7 +47,8 @@ In practice, when a parent, guardian or substitute decision-maker answers for th
 - `step({"type": "submit", ...})` runs the check once and logs the submission with its result. A fail returns the missing items and the episode continues; only a pass is final. After 3 failed submissions in a row the episode goes to the clinician queue and agents are refused until a clinician sends `review`. A clinician can always finish in their own session.
 - `check()` (harness) is a deterministic checker with no model.
 - `replay(log)` (harness) rebuilds state from a log; the same log always gives the same state, and every logged submission result is recomputed.
-- `export()` (harness) refuses any episode whose id does not start with `SYNTH-`.
+- `open_episode(synthetic, timestamp)` (harness) writes the `synthetic` flag as the first log event. It can never be set again or changed.
+- `export()` (harness) reads that flag, never the episode id, and refuses any episode not marked synthetic. Export carries the `interpreter` field (set only by a clinician session on answer events).
 
 The command line wraps the same calls. Exit codes: 0 complete, 1 not yet complete, 2 invalid or refused.
 
@@ -56,6 +60,7 @@ Python 3.11 or later, standard library only.
 git clone https://github.com/wetware-hq/forms.git
 cd forms
 python3 forms.py build   examples/physio_falls_risk.toml
+python3 forms.py open    examples/physio_falls_risk.toml log.jsonl SYNTH-EP-1 --synthetic true --ts 1936-05-02T08:59
 python3 forms.py approve examples/physio_falls_risk.toml log.jsonl SYNTH-EP-1 --role clinician --discipline physiotherapy --actor SYNTH-pt-01 --ts 1936-05-02T09:00
 python3 forms.py answer  examples/physio_falls_risk.toml log.jsonl SYNTH-EP-1 stands_unaided=true --role clinician --discipline physiotherapy --actor SYNTH-pt-01 --ts 1936-05-02T09:05
 python3 forms.py status  examples/physio_falls_risk.toml log.jsonl SYNTH-EP-1
@@ -73,12 +78,16 @@ Both examples stop at exit 1: the forms are not complete yet.
 
 ## Rules
 
-Every rule is a row in `RULES.md` with its signer, class (safety or efficacy), the role it protects and the tests that plant its failure. Everything a person sees comes from `messages.py`, which must match the signed wording table `WORDING.md` word for word; a patient is never shown a machine code.
+Every rule is a row in `RULES.md` with its signer, class (safety or efficacy), the role it protects and the tests that plant its failure.
+
+Everything a person sees comes from `WORDING.md`: the signed line ids and wording (every fill-in value, such as a queue status or a relationship word, is its own row) and any lines still pending signature. It is generated by `scripts/sync_wording.py` from the signed table and carries the SHA-256 of its content in its header. `messages.py` reads only `WORDING.md` and holds no wording of its own.
 
 ```bash
-python3 scripts/rulecheck.py                  # exit 0: every rule has a test, all wording matches WORDING.md
-python3 scripts/mutate.py forms.py _gate      # exit 0: every mutant of the gate is caught
+python3 scripts/rulecheck.py                  # exit 0: every rule has a test, WORDING.md matches its hash, register rows match it
+python3 scripts/mutate.py forms.py _gate     # exit 0: every mutant of the gate is caught
 ```
+
+The tests check `WORDING.md` against its header hash and check that every line id used in the code exists in it. Before pushing, maintainers run `python3 scripts/prepush.py SIGNED_TABLE.md`, which compares `WORDING.md` with the signed table and fails on internal names or local paths.
 
 ## Tests
 
@@ -90,7 +99,7 @@ Contributors run pytest and `scripts/rulecheck.py` before every commit. Agent ru
 
 ## Status
 
-An MCP server is planned. There isn't one yet. All 58 wording lines are signed; `WORDING.md` is the signed table.
+An MCP server is planned. There isn't one yet. All lines in `WORDING.md` are signed. Lines still waiting for signature are in `messages.PENDING` (draft: `WORDING_PENDING.md`); `CQ-SAMEDAY-ALERT` is a placeholder until it is drafted.
 
 ## Licence
 

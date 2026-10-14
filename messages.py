@@ -1,87 +1,30 @@
-"""The only place user-facing text lives. Every line is keyed by its wording-table id.
+"""Loads user-facing text from WORDING.md; no wording is written here. Every line is keyed by its wording-table id.
 Text in [ ] is filled from schema/table fields only. Conditions with no wording line yet
 return a machine code 'ERR:<name>' (not prose) so they stay visible as wording gaps."""
 import re
 
-WORDING_SOURCE = "WORDING.md"   # signed wording table; LINES must match it word for word
-SIGNER = "Physician"
-STATUS = "signed"
+import pathlib
 
-LINES = {
-    "PV-ANS-SELF": "You answered",
-    "PV-ANS-AGENT": "Your assistant answered. You haven't checked this yet.",
-    "PV-DECLINED": "You chose not to answer",
-    "PV-SKIPPED": "Not asked, because [condition plain wording]",
-    "PV-OPEN": "Not answered yet",
-    "PV-GRANT": "Your assistant can help with this form (from [date])",
-    "PV-REVOKE": "Your assistant can no longer help with this form (from [date])",
-    "PV-REASK": "We need to ask this again because the question changed or this is a new visit.",
-    "PV-CONFIRM": "Your assistant answered [Yes/No]. Is that right?",
-    "RF-ROLE-CANCEL": "Refused: only a clinician's own session can cancel a safety job.",
-    "RF-ROLE-CONFIRM": "Refused: only the patient's own session can confirm or decline this answer.",
-    "RF-NO-GRANT": "Refused: the patient has not let an assistant help with this form.",
-    "RF-REVOKED": "Refused: the patient stopped this assistant helping on [date].",
-    "RF-NOT-BOOL": "Refused: answers must be Yes or No.",
-    "RF-PERSON-JOB": "Refused: a person must do this job and tick it in their own session.",
-    "RF-EVIDENCE": "Refused: a tick needs a record id, such as a result or a sent document.",
-    "RF-CANCEL-REASON": "Refused: cancelling needs a reason.",
-    "RF-NOT-APPROVED": "Refused: this form or list is not approved by a clinician yet.",
-    "CK-TWO-FACTS": "Question [n] asks more than one thing. Split it.",
-    "CK-NEGATIVE": "Question [n] is worded as a negative. Reword it as a plain question.",
-    "CK-NO-ALERT": "Question [n] has no alert answer set.",
-    "CK-COND-ORDER": "Question [n] depends on a later question.",
-    "CK-COND-WORDS": "Question [n] has a condition with no plain wording.",
-    "CK-LOOP": "Jobs [a] and [b] wait on each other, so neither can be done.",
-    "CK-NO-SOURCE": "Job [n] does not say which line it came from.",
-    "BK-UNANSWERED": "Not finished: [k] questions still need an answer.",
-    "BK-CLIN-CONFIRM": "Not finished: a clinician must confirm question [n].",
-    "BK-STALE": "Answer to question [n] is from another episode or an old version, so it must be asked again.",
-    "FL-ALERT": "Alert: question [n] was answered [alert answer].",
-    "FL-UNKNOWN": "Alert: question [n] is safety-critical and was not answered. Treat as a risk.",
-    "FL-DECLINED": "Alert: the patient chose not to answer question [n], which is safety-critical. Treat as a risk and ask in person.",
-    "FL-OVERDUE": "Overdue: [job text], owner [owner], due [time].",
-    "FL-GAP": "No job was made from source line [n]. Approve or add one.",
-    "RF-AGENT-CLIN-FORM": "Refused: the patient's assistant can only help with the patient's own forms.",
-    "RF-EVIDENCE-NOT-FOUND": "Refused: no record with this id was found.",
-    "CK-TWO-ITEMS": "Question [n] lists more than one thing. Split it, or send it to a clinician to check.",
-    "CQ-TWO-ITEMS": "For a clinician to check: question [n] names more than one thing.",
-    "ST-DONE": "Done: every job is finished.",
-    "ST-CLOSED": "Closed: every job is finished or was cancelled with a reason.",
-    "ST-FORM-DONE": "Form complete: every question has an answer, or was skipped or declined.",
-    "PV-NEXT": "Next for you: [question or job plain wording]",
-    "PV-NOTHING-NEXT": "There's nothing for you to do right now.",
-    "ER-DUP-ID": "Setup error: the id [id] is used more than once.",
-    "ER-BAD-FIELD": "Setup error: [field] in [item] is missing or not allowed.",
-    "ER-BAD-COMMAND": "Command not recognised. Run with --help to see the commands.",
-    "RF-SCOPE": "Refused: this item can only be confirmed, cancelled or ticked by [disciplines].",
-    "RF-UNREGISTERED": "Refused: only registered health professionals and patients can use this in version 1.",
-    "RF-CLIN-AGENT": "Refused: a clinician's assistant can draft and propose, but cannot confirm, cancel or approve.",
-    "WT-WAITING": "Waiting: this job can start once [job text] is done.",
-    "PV-ANS-CLIN": "Your care team answered: [discipline], on [date].",
-    "PV-ANS-SDM": "[relationship] answered for you, recorded by your care team on [date].",
-    "RF-HARNESS-ONLY": "Refused: only the system running this session can start it again or replay it.",
-    "RF-NOT-YOURS": "Refused: you don't have access to this.",
-    "RF-EXPORT-REAL": "Refused: only synthetic sessions can be exported.",
-    "ST-CHECK-PASS": "Submitted and checked: complete. This result is final.",
-    "ST-CHECK-FAIL": "Submitted and checked: not complete yet. See what's missing below.",
-    "CQ-THREE-FAILS": "For a clinician to check: this was submitted 3 times without passing. Missing: [items].",
-    "RF-WAIT-CLINICIAN": "Refused: a clinician must look at this before it can be submitted again.",
-}
-# Signed list of legal decision-making roles: key -> (patient wording, clinician wording). No free text.
-RELATIONSHIP = {
-    "parent": ("Your parent", "Parent"),
-    "guardian": ("Your guardian", "Guardian"),
-    "sdm": ("The person legally allowed to decide for you",
-            "Substitute decision-maker (the local legal term, such as healthcare proxy in the US)"),
-}
-# Lines waiting for signature (none now). Move into LINES and WORDING.md only after signing.
-PENDING = {}
+# Every word a person sees comes from WORDING.md, generated from the signed table by scripts/sync_wording.py.
+WORDING = pathlib.Path(__file__).resolve().parent / "WORDING.md"
+_TEXT = WORDING.read_text()
+_BODY = _TEXT.split("\n\n", 1)[1]
+SHA256 = re.search(r"^sha256: ([0-9a-f]{64})$", _TEXT, re.M).group(1)
+# Signed lines: id -> wording.
+LINES = dict(re.findall(r"^\| ([A-Z]{2,4}-[A-Z0-9-]+) \| ([^|]*?) \|$", _BODY, re.M))
+# Lines in use but not yet signed (reported by rulecheck as pending).
+PENDING = dict(re.findall(r"^\| ([A-Z]{2,4}-[A-Z0-9-]+) \| ([^|]*?) \| pending \|$", _BODY, re.M))
+# Signed legal decision-making roles: role id -> (patient wording, clinician wording), from rows REL-<ROLE>-PT/-CLIN.
+RELATIONSHIP = {role: (LINES[f"REL-{role.upper()}-PT"], LINES[f"REL-{role.upper()}-CLIN"])
+                for role in ("parent", "guardian", "sdm")}
+# CQ-SAMEDAY-ALERT / CQ-BEFORE-PROC [status], from rows ST-<STATUS>.
+SAMEDAY_STATUS = {k: LINES[f"ST-{k.upper()}"] for k in ("unconfirmed", "confirmed", "changed", "declined", "unknown")}
 SLOT = re.compile(r"\[([^\]]+)\]")
 KEY = {"condition plain wording": "condition", "Yes/No": "yesno", "alert answer": "yesno",
        "job text": "job_text", "n": "n", "k": "k", "a": "a", "b": "b", "date": "date",
        "owner": "owner", "time": "time",
        "question or job plain wording": "plain", "id": "id", "field": "field", "item": "item", "disciplines": "disciplines", "discipline": "discipline",
-       "relationship": "relationship", "items": "items"}
+       "relationship": "relationship", "items": "items", "parent question text": "parent_text", "m": "m", "question text": "text", "item_id": "item_id", "event_id": "event_id", "status": "status"}
 
 
 def msg(line_id, **f):

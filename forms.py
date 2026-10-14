@@ -3,20 +3,21 @@
 Schema: TOML. Store: append-only event log (JSONL). Everything else is derived by replaying the log.
 Agents never infer: every answer is an explicit event. All user-facing text comes from messages.py."""
 import datetime, hashlib, json, re, sys, tomllib
-from messages import msg, code, RELATIONSHIP
+from messages import msg, code, RELATIONSHIP, SAMEDAY_STATUS as SD
 from access import Invalid, AGENTS, open_session, in_scope
 
 ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 NEG_RE = re.compile(r"\b(no|not|never|without|none)\b|n't\b", re.I)
 TWO_RE = re.compile(r"\b(and|or)\b|[,/]", re.I)
 Q_REQ = {"id", "version", "text", "alert_answer", "safety_critical", "clinician_must_confirm"}
-Q_OPT = {"ask_if", "two_item_ok", "disciplines"}
+Q_OPT = {"ask_if", "two_item_ok", "disciplines", "alert_route", "sensitive"}
+ROUTES = {"same_day": ("CQ-SAMEDAY-ALERT", "PV-SAMEDAY"), "before_procedure": ("CQ-BEFORE-PROC", "PV-BEFORE-PROC")}
 
 # ---- permission table: role -> actions it may take. Refusal line when an action is not allowed. ----
 PERMS = {
     "patient": {"answer", "decline", "confirm", "grant", "revoke", "submit", "next"},
     "patient_agent": {"answer", "submit", "next"},
-    "clinician": {"answer", "confirm", "approve", "submit", "review", "next"},
+    "clinician": {"answer", "confirm", "approve", "submit", "review", "close_sameday", "next"},
     "clinician_agent": {"answer", "submit", "next"},
 }
 # ---- per-call permissions: env methods a session may call through call(). reset, replay, check and export
@@ -33,9 +34,10 @@ DENY = {"patient": None, "patient_agent": "RF-ROLE-CONFIRM", "clinician": "RF-RO
 CONFIRMER = {"patient": "patient", "clinician": "clinician"}   # audience -> who confirms an agent's answer
 SCOPED = {"clinician", "clinician_agent"}                        # roles checked against scope of practice
 FIELDS = {"answer": {"question_id", "value"}, "decline": {"question_id"}, "confirm": {"question_id"},
-          "grant": set(), "revoke": set(), "approve": set(), "submit": set(), "review": set()}
-OPTIONAL = {"answer": {"on_behalf"}, "decline": set(), "confirm": set(), "grant": set(), "revoke": set(), "approve": set(),
-            "submit": set(), "review": set()}
+          "grant": {"agent", "patient"}, "revoke": {"agent", "patient"}, "approve": set(), "submit": set(), "review": set(),
+          "close_sameday": {"question_id", "status"}}
+OPTIONAL = {"answer": {"on_behalf", "interpreter"}, "decline": set(), "confirm": set(), "grant": set(), "revoke": set(), "approve": set(),
+            "submit": set(), "review": set(), "close_sameday": set()}
 DERIVED = {"submit": {"result", "missing"}}   # filled by the env at submission, checked again on replay
 SESSION_KEYS = {"actor", "role", "discipline", "scope", "episode_id", "source"}
 
@@ -77,7 +79,7 @@ def check_schema(d):
             raise Invalid(msg("ER-BAD-FIELD", field="text", item=item))
         if NEG_RE.search(t):
             raise Invalid(msg("CK-NEGATIVE", n=n))
-        for k in ("alert_answer", "safety_critical", "clinician_must_confirm", "two_item_ok"):
+        for k in ("alert_answer", "safety_critical", "clinician_must_confirm", "two_item_ok", "sensitive"):
             if k in q and type(q[k]) is not bool:
                 raise Invalid(msg("RF-NOT-BOOL"))
         if TWO_RE.search(t) and not q.get("two_item_ok"):
@@ -85,6 +87,8 @@ def check_schema(d):
         if "disciplines" in q and (not q["safety_critical"] or not isinstance(q["disciplines"], list)
                                    or not q["disciplines"] or not all(isinstance(x, str) and x for x in q["disciplines"])):
             raise Invalid(msg("ER-BAD-FIELD", field="disciplines", item=item))
+        if "alert_route" in q and (not q["safety_critical"] or q["alert_route"] not in ROUTES):
+            raise Invalid(msg("ER-BAD-FIELD", field="alert_route", item=item))
         if "ask_if" in q:
             a = q["ask_if"]
             if not isinstance(a, dict) or not {"id", "equals"} <= set(a) <= {"id", "equals", "wording"}:
@@ -162,10 +166,12 @@ class FormEnv:
     # ---- derived view ----
     def _fold(self):
         st = {i: {"state": "unanswered"} for i in self.ids}
-        meta = {"approver": None, "grant": None, "revoked_on": None, "granted_on": None,
-                "submissions": 0, "fails": 0, "passed": False, "missing": []}
-        for e in self.log:
+        meta = {"approver": None, "grant": None, "revoked_on": None, "granted_on": None, "grants": {}, "patient": None,
+                "submissions": 0, "fails": 0, "passed": False, "missing": [], "sameday": {}, "closed_sameday": {}}
+        for k, e in enumerate(self.log):
             t = e["type"]
+            if t == "open":
+                continue
             if t == "approve":
                 if e["schema_hash"] == self.hash and e["episode_id"] == self.episode_id:
                     meta["approver"] = e["discipline"]
@@ -175,14 +181,20 @@ class FormEnv:
                 meta["passed"] = e["result"] == "pass"
                 meta["fails"] = 0 if meta["passed"] else meta["fails"] + 1
                 meta["missing"] = e["missing"]
+                for i in e["missing"]:      # still unanswered at a submission: answer unknown
+                    if self.q[i]["safety_critical"] and st[i]["state"] == "unanswered" and i not in meta["sameday"]:
+                        meta["sameday"][i] = {"event": k, "status": SD["unknown"]}
                 continue
             if t == "review":
                 meta["fails"] = 0
+                meta["sameday"] = {}        # only a clinician closes same-day entries
                 continue
             if t in ("grant", "revoke"):
                 meta["grant"] = t == "grant"
                 meta["revoked_on"] = None if t == "grant" else e["timestamp"][:10]
                 meta["granted_on"] = e["timestamp"][:10] if t == "grant" else None
+                meta["grants"][e["agent"]] = {"on": t == "grant", "revoked_on": meta["revoked_on"]}
+                meta["patient"] = e["patient"]
                 continue
             i = e["question_id"]
             if e["episode_id"] != self.episode_id or e["question_version"] != self.q[i]["version"]:
@@ -190,16 +202,52 @@ class FormEnv:
             elif t == "answer":
                 st[i] = {"state": "answered", "value": e["value"], "source": e["role"],
                          "confirmed": e["role"] not in AGENTS, "confirmed_by": None,
-                         "discipline": e["discipline"], "date": e["timestamp"][:10], "on_behalf": e.get("on_behalf")}
+                         "discipline": e["discipline"], "date": e["timestamp"][:10], "on_behalf": e.get("on_behalf"),
+                         "interpreter": e.get("interpreter", False), "at": k}
             elif t == "decline":
                 st[i] = {"state": "declined"}
             elif t == "confirm":
-                st[i] = dict(st[i], confirmed=True, confirmed_by=e["role"])
+                st[i] = dict(st[i], confirmed=True, confirmed_by=e["role"], at=k)
+            elif t == "close_sameday":
+                meta["sameday"].pop(i, None)
+                meta["closed_sameday"][i] = e["status"]
+                continue
+            self._sameday(meta["sameday"], st[i], i, t, k)
         return st, meta
+
+    def _sameday(self, sd, s, i, t, k):
+        """Same-day queue entries for safety-critical questions: a yes (the alert answer), a decline or an
+        unknown each opens one; a later change to no keeps it open with the changed status until reviewed."""
+        if not self.q[i]["safety_critical"] or s.get("stale"):
+            return
+        if t == "decline":
+            sd[i] = {"event": k, "status": SD["declined"]}
+        elif t == "answer" and s["value"] == self.q[i]["alert_answer"]:
+            sd[i] = {"event": k, "status": SD["confirmed"] if s["confirmed"] else SD["unconfirmed"]}
+        elif t == "answer" and i in sd:
+            sd[i] = dict(sd[i], status=SD["changed"])
+        elif t == "confirm" and i in sd and sd[i]["status"] == SD["unconfirmed"]:
+            sd[i] = dict(sd[i], status=SD["confirmed"])
+
+    def route(self, i):
+        """alert_route of a question: same_day unless set to before_procedure."""
+        return self.q[i].get("alert_route", "same_day")
+
+    def _contact_today(self, s, i, sdm):
+        """PV-SAMEDAY: a confirmed yes, a decline, or an unknown on a safety-critical question."""
+        q = self.q[i]
+        return q["safety_critical"] and (
+            (s["state"] == "answered" and s["confirmed"] and s["value"] == q["alert_answer"])
+            or s["state"] == "declined" or sdm.get(i, {}).get("status") == SD["unknown"])
+
+    def _waiting_parent(self, st, i):
+        a = self.q[i].get("ask_if")
+        return bool(a) and st[a["id"]]["state"] == "unanswered"
 
     def _applicable(self, st, i):
         a = self.q[i].get("ask_if")
-        return not a or not (st[a["id"]]["state"] == "answered" and st[a["id"]]["value"] != a["equals"])
+        p = st[a["id"]] if a else None
+        return not a or not (p["state"] == "answered" and p["confirmed"] and p["value"] != a["equals"])
 
     def _resolved(self, s, q):
         if q["clinician_must_confirm"]:
@@ -211,11 +259,13 @@ class FormEnv:
 
     def check(self):
         st, meta = self._fold()
-        open_, flags, blocked, na, answers = [], [], [], [], {}
+        open_, flags, blocked, na, answers, waiting = [], [], [], [], {}, []
         for i in self.ids:
             s, q, n = st[i], self.q[i], self.num[i]
             if not self._applicable(st, i):
                 na.append(i); answers[i] = "n/a"; continue
+            if self._waiting_parent(st, i):
+                waiting.append(i); answers[i] = "waiting"; continue
             answers[i] = s["value"] if s["state"] == "answered" else s["state"]
             if not self._resolved(s, q):
                 open_.append(i)
@@ -233,12 +283,23 @@ class FormEnv:
             blocked.insert(0, msg("BK-UNANSWERED", k=len(open_)))
         if meta["approver"] is None:
             blocked.insert(0, msg("RF-NOT-APPROVED"))
-        done = not open_ and meta["approver"] is not None
+        alerts = [i for i in self.ids if i in meta["sameday"] and self._applicable(st, i)]
+        done = not open_ and not alerts and meta["approver"] is not None
         given_by = {i: RELATIONSHIP[st[i]["on_behalf"]][1] for i in self.ids if st[i].get("on_behalf")}
-        queue = [msg("CQ-THREE-FAILS", items=", ".join(f"question {self.num[i]}" for i in meta["missing"]))] if meta["fails"] >= MAX_FAILS else []
+        queue = [msg("CQ-THREE-FAILS", items="; ".join(f"{self.num[i]}. {self.q[i]['text']}" for i in meta["missing"]))] if meta["fails"] >= MAX_FAILS else []
+        sd = [msg(ROUTES[self.route(i)][0], item_id=i, event_id=meta["sameday"][i]["event"], status=meta["sameday"][i]["status"])
+              for i in alerts]
+        queue += sd
+        blocked += sd
+        waiting_lines = []
+        for i in waiting:
+            par = self.q[i]["ask_if"]["id"]
+            waiting_lines.append(msg("CQ-WAITING-PARENT", n=self.num[par], parent_text=self.q[par]["text"], m=self.num[i], text=self.q[i]["text"]))
+        queue += waiting_lines
         return {"complete": done, "status": msg("ST-FORM-DONE") if done else None, "open": open_,
                 "blocked": blocked, "flags": flags, "not_applicable": na, "answers": answers, "given_by": given_by,
-                "submissions": meta["submissions"], "final": meta["passed"], "clinician_queue": queue}
+                "submissions": meta["submissions"], "final": meta["passed"], "clinician_queue": queue,
+                "waiting": waiting, "waiting_lines": waiting_lines, "alerts": alerts, "sameday_closed": dict(meta["closed_sameday"])}
 
     def patient_view(self):
         """What the patient sees. Only table lines; nothing where no line exists."""
@@ -268,6 +329,13 @@ class FormEnv:
                 out[i] = msg("PV-ANS-CLIN", discipline=s["discipline"], date=s["date"])
             else:
                 out[i] = ""
+        sdm = meta["sameday"]
+        for i in self.ids:
+            if sdm.get(i, {}).get("status") == SD["changed"]:
+                out[i] += " " + msg("PV-ANS-CHANGED")
+        for key, route in (("sameday", "same_day"), ("before_procedure", "before_procedure")):
+            if any(self.route(i) == route and self._applicable(st, i) and self._contact_today(st[i], i, sdm) for i in self.ids):
+                out[key] = msg(ROUTES[route][1])
         nxt = [i for i in self.check()["open"] if st[i]["state"] == "unanswered"]
         out["next"] = msg("PV-NEXT", plain=self.q[nxt[0]]["text"]) if nxt else msg("PV-NOTHING-NEXT")
         return out
@@ -286,7 +354,8 @@ class FormEnv:
         forms inside its clinician's scope (the approving discipline)."""
         s, meta = self.session, self._fold()[1]
         if s.role == "patient_agent":
-            return self.schema["audience"] == "patient" and meta["grant"] is True
+            g = meta["grants"].get(s.actor)
+            return self.schema["audience"] == "patient" and bool(g) and g["on"]
         if s.role == "clinician_agent":
             return in_scope(s, [meta["approver"]] if meta["approver"] else [])
         return True
@@ -307,11 +376,24 @@ class FormEnv:
             return {"accepted": False, "reason": msg("RF-HARNESS-ONLY")}
         return getattr(self, method)(*args, **kw)
 
+    def open_episode(self, synthetic, timestamp):
+        """Harness-only. Writes the synthetic flag as the first log event; it can never be set again or changed."""
+        if self.log or type(synthetic) is not bool:
+            raise Invalid(code("open_first_only"))
+        self.log.append({"type": "open", "synthetic": synthetic, "timestamp": timestamp, "episode_id": self.episode_id})
+
+    def synthetic(self):
+        first = self.log[0] if self.log else {}
+        return first.get("type") == "open" and first.get("synthetic") is True
+
     def export(self):
-        """Harness-only. Refuses any episode not marked synthetic (episode id starting SYNTH-)."""
-        if not (isinstance(self.episode_id, str) and self.episode_id.startswith("SYNTH-")):
+        """Harness-only. Reads the synthetic flag from the first log event, never the episode id."""
+        if not self.synthetic():
             raise Invalid(msg("RF-EXPORT-REAL"))
-        return dict(self.check(), bitsets=self.bitsets())
+        st = self._fold()[0]
+        interp = {i: st[i]["interpreter"] for i in self.ids if st[i]["state"] == "answered"}
+        sensitive = [i for i in self.ids if self.q[i].get("sensitive") is True]
+        return dict(self.check(), bitsets=self.bitsets(), synthetic=True, interpreter=interp, sensitive=sensitive)
 
     # ---- gate: event + the session that made it ----
     def _gate(self, e, s):
@@ -332,19 +414,35 @@ class FormEnv:
         if s.role in AGENTS and meta["fails"] >= MAX_FAILS:
             return msg("RF-WAIT-CLINICIAN")
         if t == "review":
-            return None if meta["fails"] >= MAX_FAILS else code("nothing_to_review")
+            return None if meta["fails"] >= MAX_FAILS or meta["sameday"] else code("nothing_to_review")
         if (s.role == "patient_agent" or t == "grant") and self.schema["audience"] != "patient":
             return msg("RF-AGENT-CLIN-FORM")
-        if s.role == "patient_agent" and meta["grant"] is None:
+        g = meta["grants"].get(s.actor)
+        if s.role == "patient_agent" and g is None:
             return msg("RF-NO-GRANT")
-        if s.role == "patient_agent" and meta["grant"] is False:
-            return msg("RF-REVOKED", date=meta["revoked_on"])
+        if s.role == "patient_agent" and not g["on"]:
+            return msg("RF-REVOKED", date=g["revoked_on"])
+        if t in ("grant", "revoke"):
+            if not (isinstance(e["agent"], str) and e["agent"].strip()):
+                return code("grant_names_agent")
+            if e["patient"] != s.actor or meta["patient"] not in (None, e["patient"]):
+                return code("grant_names_this_patient")
+            if t == "revoke" and not (meta["grants"].get(e["agent"]) or {}).get("on"):
+                return code("nothing_to_revoke")
         if t in ("grant", "revoke", "submit"):
             return None
         i = e["question_id"]
         if i not in self.q:
             return code("question_id")
+        if t == "close_sameday":
+            if e["status"] not in SD.values():
+                return code("status_not_on_signed_list")
+            return None if i in meta["sameday"] else code("nothing_to_close")
         if t == "answer" and type(e["value"]) is not bool:
+            return msg("RF-NOT-BOOL")
+        if "interpreter" in e and s.role != "clinician":
+            return code("interpreter_clinician_only")
+        if "interpreter" in e and type(e["interpreter"]) is not bool:
             return msg("RF-NOT-BOOL")
         if "on_behalf" in e and s.role != "clinician":
             return code("on_behalf_clinician_only")
@@ -390,7 +488,9 @@ class FormEnv:
         if t == "submit":
             if e["result"] == "pass":
                 return {"accepted": True, "result": msg("ST-CHECK-PASS"), "final": True}
-            return {"accepted": True, "result": msg("ST-CHECK-FAIL"), "final": False, "missing": self.check()["blocked"]}
+            c = self.check()
+            return {"accepted": True, "result": msg("ST-CHECK-FAIL"), "final": False,
+                    "missing": c["blocked"] + c["waiting_lines"]}
         return {"accepted": True}
 
     def _refuse(self, why):
@@ -402,10 +502,16 @@ class FormEnv:
     def replay(self, log):
         """Rebuild from a stored log; every in-episode event must pass the gate again."""
         self.log = []
-        for e in log:
+        for n, e in enumerate(log):
+            if isinstance(e, dict) and e.get("type") == "open":
+                if n != 0 or set(e) != {"type", "synthetic", "timestamp", "episode_id"} \
+                        or e["episode_id"] != self.episode_id:
+                    raise Invalid(code("open_first_only"))
+                self.open_episode(e["synthetic"], e["timestamp"])
+                continue
             if not isinstance(e, dict) or e.get("type") not in FIELDS:
                 raise Invalid(code("log_event"))
-            if e["type"] not in ("approve", "grant", "revoke", "submit", "review") and e.get("question_id") in self.q and (
+            if e["type"] not in ("approve", "grant", "revoke", "submit", "review", "close_sameday") and e.get("question_id") in self.q and (
                     e.get("episode_id") != self.episode_id or e.get("question_version") != self.q[e["question_id"]]["version"]):
                 self.log.append(dict(e))       # kept: reverts its question to unanswered
                 continue
@@ -451,9 +557,11 @@ def cli_bool(s):
 
 
 def main(argv):
-    """build SCHEMA | status|export SCHEMA LOG EPISODE |
-    approve|grant|revoke|answer|decline|confirm SCHEMA LOG EPISODE [items] --role R --actor A --ts ISO
-    [--discipline D] [--scope d1,d2]   (answer items: id=true|false; decline/confirm items: id)"""
+    """build SCHEMA | open SCHEMA LOG EPISODE --synthetic true|false --ts ISO (harness: first event only) |
+    status|export SCHEMA LOG EPISODE |
+    approve|grant|revoke|answer|decline|confirm|submit|review|close_sameday SCHEMA LOG EPISODE [items] --role R --actor A --ts ISO
+    [--discipline D] [--scope d1,d2] [--agent AGENT_ID (grant/revoke)] [--on_behalf parent|guardian|sdm] [--interpreter true|false]
+    (answer items: id=true|false; decline/confirm items: id; close_sameday: id --status "<signed status>")"""
     try:
         cmd = argv[1] if len(argv) > 1 else ""
         pos, o = opts(argv[2:])
@@ -464,6 +572,12 @@ def main(argv):
                 with open(pos[0] + ".clinician_queue.txt", "w") as f:
                     f.write("\n".join(q) + "\n")
             return 0
+        if cmd == "open" and len(pos) == 3 and {"synthetic", "ts"} <= set(o):
+            env = FormEnv(); env.reset(pos[0], "harness", "patient", pos[2]); env.replay(read_log(pos[1]))
+            env.open_episode(cli_bool(o["synthetic"]), o["ts"])
+            with open(pos[1], "a") as f:
+                f.write(json.dumps(env.log[0], ensure_ascii=False) + "\n")
+            return 0
         if cmd in ("status", "export") and len(pos) == 3:
             env = FormEnv(); env.reset(pos[0], "cli", "patient", pos[2]); env.replay(read_log(pos[1]))
         elif cmd in FIELDS and len(pos) >= 3 and {"role", "actor", "ts"} <= set(o):
@@ -472,7 +586,7 @@ def main(argv):
                       tuple(x for x in o.get("scope", "").split(",") if x))
             env.replay(read_log(pos[1]))
             start = len(env.log)
-            items = pos[3:] if FIELDS[cmd] else [None]
+            items = [None] if cmd in ("grant", "revoke") or not FIELDS[cmd] else pos[3:]
             if not items:
                 raise Invalid(msg("ER-BAD-COMMAND"))
             for item in items:
@@ -482,8 +596,14 @@ def main(argv):
                     a.update(question_id=qid, value=cli_bool(val) if eq else None)
                     if "on_behalf" in o:
                         a["on_behalf"] = o["on_behalf"]
+                    if "interpreter" in o:
+                        a["interpreter"] = cli_bool(o["interpreter"])
+                elif cmd in ("grant", "revoke"):
+                    a.update(agent=o.get("agent", ""), patient=o["actor"])
                 elif FIELDS[cmd]:
                     a["question_id"] = item
+                    if cmd == "close_sameday":
+                        a["status"] = o.get("status", "")
                 r = env.step(a)
                 if not r["accepted"]:
                     raise Invalid(r["reason"])

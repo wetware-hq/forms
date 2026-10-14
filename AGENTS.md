@@ -40,8 +40,9 @@ Normative rules for agents that operate or modify forms. Wording uses RFC 2119: 
 - Changes to the gate or permission table **SHOULD** be followed by `python3 scripts/mutate.py forms.py _gate`, which **MUST** catch every mutant.
 - Non-negotiables (roles, scope of practice, approval, evidence, wording) **MUST** be enforced by deterministic code in the gate and checker. They **MUST NOT** depend on a model, a prompt or a reviewer's judgement.
 - The event log is append-only. Code **MUST NOT** rewrite, reorder or delete log lines. A correction is a new event. State **MUST** be rebuilt by replay, and the same log **MUST** give the same state.
-- Every string a person sees **MUST** come from `messages.py`. Its fixed wording lines **MUST NOT** be edited, added or reworded ad hoc; `LINES` **MUST** match the signed table `WORDING.md` word for word. A line not yet signed goes in `messages.PENDING`, which rulecheck reports as pending.
-- Exports **MUST** refuse any episode not marked synthetic.
+- Every string a person sees **MUST** come from `WORDING.md`, which **MUST** only be regenerated with `scripts/sync_wording.py` from the signed table, never edited by hand. `messages.py` **MUST NOT** hold wording. Lines not yet signed go in the pending section of `WORDING.md` and are reported by rulecheck.
+- Exports **MUST** refuse any episode whose first log event is not the harness-written `synthetic: true` flag. The flag **MUST NOT** be inferred from the episode id, set by a session, or changed.
+- A patient's agent **MUST** act only under a grant naming its exact id and the patient.
 - Standard library only. Python 3.11 or later.
 
 ## Out of scope

@@ -15,7 +15,7 @@ EP = "SYNTH-EP-0001"
 CLIN = {"actor": "SYNTH-dr-01", "role": "clinician", "discipline": "medicine"}
 
 def approval(case, discipline="medicine", ep=EP):
-    a = F.FormEnv(); a.reset(case, "SYNTH-dr-01", "clinician", ep, discipline)
+    a = F.FormEnv(); a.reset(case, "SYNTH-dr-01", "clinician", ep, discipline); a.open_episode(True, TS)
     assert a.step({"type": "approve", "timestamp": TS})["accepted"]
     return a.log
 
@@ -24,9 +24,15 @@ def env(case=PH, role="patient", ep=EP, discipline=None, scope=(), approve="medi
     log = approval(case, approve, ep) if approve else []
     if grant:
         p = F.FormEnv(); p.reset(case, "SYNTH-pt-01", "patient", ep); p.replay(log)
-        assert p.step({"type": "grant", "timestamp": TS})["accepted"]; log = p.log
-    e = F.FormEnv(); e.reset(case, "SYNTH-person-01", role, ep, discipline, scope); e.replay(log)
+        assert p.step(grant_ev())["accepted"]; log = p.log
+    actor = "SYNTH-pt-01" if role == "patient" else "SYNTH-person-01"
+    e = F.FormEnv(); e.reset(case, actor, role, ep, discipline, scope); e.replay(log)
     return e
+
+AGENT = "SYNTH-person-01"
+
+def grant_ev(t="grant", agent=AGENT, patient="SYNTH-pt-01", ts=TS):
+    return {"type": t, "timestamp": ts, "agent": agent, "patient": patient}
 
 def ans(i, v):
     return {"type": "answer", "question_id": i, "value": v, "timestamp": TS}
@@ -35,7 +41,8 @@ def act(t, i=None):
     return {"type": t, "timestamp": TS, **({"question_id": i} if i else {})}
 
 def as_role(e, role, discipline=None, scope=()):
-    f = F.FormEnv(); f.reset(e.schema, "SYNTH-person-02", role, e.episode_id, discipline, scope); f.replay(e.log)
+    actor = {"patient_agent": AGENT, "patient": "SYNTH-pt-01"}.get(role, "SYNTH-person-02")
+    f = F.FormEnv(); f.reset(e.schema, actor, role, e.episode_id, discipline, scope); f.replay(e.log)
     return f
 
 def bad_schema(fn, base=SPH):
@@ -149,13 +156,15 @@ def test_status_exit_codes(tmp_path):
     assert F.main(["f", "status", PP, log, EP]) == 1
     assert cli("approve", PP, log) == 1
     ids = [q["id"] for q in tomllib.loads(pathlib.Path(PP).read_text())["question"]]
-    assert cli("answer", PP, log, *[f"{i}=true" for i in ids]) == 0
+    assert cli("answer", PP, log, *[f"{i}=true" for i in ids]) == 1      # anticoagulant alert waits for review
+    assert cli("review", PP, log) == 0
     assert F.main(["f", "status", PP, log, EP]) == 0
     assert cli("answer", PP, log, "site_marked=1") == 2
     assert F.main(["f"]) == 2
 
 def test_export_json(tmp_path, capsys):
     log = str(tmp_path / "l.jsonl")
+    assert F.main(["f", "open", PH, log, EP, "--synthetic", "true", "--ts", TS]) == 0
     cli("approve", PH, log); cli("answer", PH, log, "smokes=false", role="patient", disc=None); capsys.readouterr()
     assert F.main(["f", "export", PH, log, EP]) == 0
     out = json.loads(capsys.readouterr().out)
@@ -202,7 +211,7 @@ def test_audience_decides_confirmer():
 def test_patient_agent_refused_on_clinician_form():
     e = env(PP, "patient_agent")
     assert e.step(ans("site_marked", True))["reason"] == msg("RF-AGENT-CLIN-FORM")
-    assert as_role(e, "patient").step(act("grant"))["reason"] == msg("RF-AGENT-CLIN-FORM")
+    assert as_role(e, "patient").step(grant_ev("grant"))["reason"] == msg("RF-AGENT-CLIN-FORM")
 
 def test_two_items_refused_unless_flagged_to_queue(tmp_path):
     assert bad_schema(lambda d: d["question"][3].update(text="Do you smoke, drink?")) == msg("CK-TWO-ITEMS", n=4)
@@ -235,7 +244,7 @@ def test_permissions_table_by_role():
     assert F.PERMS == {
         "patient": {"answer", "decline", "confirm", "grant", "revoke", "submit", "next"},
         "patient_agent": {"answer", "submit", "next"},
-        "clinician": {"answer", "confirm", "approve", "submit", "review", "next"},
+        "clinician": {"answer", "confirm", "approve", "submit", "review", "close_sameday", "next"},
         "clinician_agent": {"answer", "submit", "next"}}
     for role, allowed in F.PERMS.items():
         assert allowed <= set(F.FIELDS) | {"next"} and role in F.DENY
@@ -279,17 +288,17 @@ def test_clinician_agent_limited_to_granter_scope():
 def test_p01_consent_failures():
     a = env(role="patient_agent", grant=True); a.step(ans("smokes", False))
     assert a.patient_view()["smokes"] != msg("PV-ANS-SELF")                     # (a)
-    p = as_role(a, "patient"); p.step(act("revoke"))
+    p = as_role(a, "patient"); p.step(grant_ev("revoke"))
     assert as_role(p, "patient_agent").step(ans("allergy_any", True))["accepted"] is False   # (b)
     d = env(); d.step(act("decline", "smokes"))
     assert d.bitsets()["value"] == 0 and d.bitsets()["answered"] == 0 and d.check()["answers"]["smokes"] != False  # (c)
 
 def test_p02_grant_and_revoke():
     assert env(role="patient_agent").step(ans("smokes", True))["reason"] == msg("RF-NO-GRANT")
-    assert env(role="clinician", discipline="medicine").step(act("grant"))["reason"] == msg("RF-ROLE-CONFIRM")
+    assert env(role="clinician", discipline="medicine").step(grant_ev("grant"))["reason"] == msg("RF-ROLE-CONFIRM")
     p = env(grant=True)
-    assert [x["type"] for x in p.log] == ["approve", "grant"]
-    p.step({"type": "revoke", "timestamp": "1936-05-03T09:00"})
+    assert [x["type"] for x in p.log] == ["open", "approve", "grant"]
+    p.step(grant_ev("revoke", ts="1936-05-03T09:00"))
     assert as_role(p, "patient_agent").step(ans("smokes", True))["reason"] == msg("RF-REVOKED", date="1936-05-03")
     q = env(role="patient_agent", grant=True); q.step(ans("smokes", True))
     assert as_role(q, "patient").patient_view()["smokes"].startswith(msg("PV-ANS-AGENT"))
@@ -374,7 +383,7 @@ def test_line_ck_cond_words():
     assert bad_schema(lambda d: d["question"][1]["ask_if"].pop("wording")) == msg("CK-COND-WORDS", n=2)
 
 def test_line_bk_unanswered():
-    assert msg("BK-UNANSWERED", k=5) in env().check()["blocked"]
+    assert msg("BK-UNANSWERED", k=4) in env().check()["blocked"]          # the follow-up waits on its parent
 
 def test_line_bk_clin_confirm():
     assert msg("BK-CLIN-CONFIRM", n=1) in env(PP, "clinician_agent", scope=("medicine",)).check()["blocked"]
@@ -436,7 +445,7 @@ def test_line_pv_grant():
     assert env(grant=True).patient_view()["access"] == "Your assistant can help with this form (from 1936-05-02)"
 
 def test_line_pv_revoke():
-    p = env(grant=True); p.step({"type": "revoke", "timestamp": "1936-05-04T08:00"})
+    p = env(grant=True); p.step(grant_ev("revoke", ts="1936-05-04T08:00"))
     assert p.patient_view()["access"] == "Your assistant can no longer help with this form (from 1936-05-04)"
 
 def test_confirm_needs_unconfirmed_agent_answer():
@@ -561,14 +570,17 @@ def test_r5_01_agents_may_observe_and_step(role, kw):
 
 def test_r5_02_failed_submission_continues_and_is_logged():
     e = env(); r = e.step(act("submit"))
-    assert r == {"accepted": True, "result": msg("ST-CHECK-FAIL"), "final": False, "missing": e.check()["blocked"]}
-    assert e.log[-1]["type"] == "submit" and e.log[-1]["result"] == "fail" and e.log[-1]["missing"] == list(ALL_Q)
+    assert r == {"accepted": True, "result": msg("ST-CHECK-FAIL"), "final": False,
+                 "missing": e.check()["blocked"] + e.check()["waiting_lines"]}
+    assert e.log[-1]["type"] == "submit" and e.log[-1]["result"] == "fail" and e.log[-1]["missing"] == [q for q in ALL_Q if q != "allergy_reaction_severe"]
     assert e.step(ans("smokes", True))["accepted"] and e.check()["submissions"] == 1
 
 def test_r5_02_pass_is_final():
     e = env(PP, "clinician", discipline="medicine")
     for q in e.ids:
         assert e.step(ans(q, False))["accepted"]
+    if e.check()["alerts"]:
+        assert e.step(act("review"))["accepted"]
     assert e.step(act("submit")) == {"accepted": True, "result": msg("ST-CHECK-PASS"), "final": True}
     assert e.check()["final"] and e.step(ans(e.ids[0], True))["accepted"] is False
 
@@ -579,10 +591,10 @@ def test_r5_02_every_role_may_submit(role, kw):
 
 def test_r5_02_three_fails_queue_and_wait():
     e = env(role="patient_agent", grant=True); fail_n(e, 2)
-    assert e.check()["clinician_queue"] == [] and e.step(ans("smokes", True))["accepted"]
+    assert not any(x.startswith("For a clinician to check: this was submitted") for x in e.check()["clinician_queue"]) and e.step(ans("smokes", True))["accepted"]
     fail_n(e, 1)
-    missing = "question 1, question 2, question 3, question 4, question 5"   # smokes is not confirmed yet
-    assert e.check()["clinician_queue"] == [msg("CQ-THREE-FAILS", items=missing)]
+    missing = "; ".join(f"{n}. {e.q[i]['text']}" for n, i in enumerate(e.ids, 1) if i != "allergy_reaction_severe")
+    assert e.check()["clinician_queue"][0] == msg("CQ-THREE-FAILS", items=missing)
     for a in (act("submit"), ans("allergy_any", True)):
         assert e.step(a) == {"accepted": False, "reason": msg("RF-WAIT-CLINICIAN")}
     assert e.check()["submissions"] == 3
@@ -591,7 +603,7 @@ def test_r5_02_clinician_review_unblocks_and_clinician_can_finish():
     e = env(role="patient_agent", grant=True); fail_n(e, 3)
     c = as_role(e, "clinician", "medicine")
     assert c.step(ans("allergy_any", False))["accepted"]          # a clinician can always finish
-    assert c.step(act("review"))["accepted"] and c.check()["clinician_queue"] == []
+    assert c.step(act("review"))["accepted"] and not any(x.startswith("For a clinician to check: this was submitted") for x in c.check()["clinician_queue"])
     assert as_role(c, "patient_agent").step(act("submit"))["accepted"]
     assert env(role="clinician", discipline="medicine").step(act("review"))["reason"] == "ERR:nothing_to_review"
     assert as_role(e, "patient").step(act("review"))["accepted"] is False
@@ -625,12 +637,414 @@ def test_r5_03_not_yours_does_not_reveal_existence():
     assert e.observe("smokes") == e.observe("no_such_item") == m.observe("no_such_item")
     assert m.observe("smokes")["accepted"]
 
-def test_r5_04_export_refuses_real_episode():
-    with pytest.raises(Invalid) as x:
-        env(ep="EP-0001").export()
-    assert str(x.value) == msg("RF-EXPORT-REAL")
-    assert env().export()["bitsets"]
+def opened(synthetic, ep=EP):
+    e = F.FormEnv(); e.reset(PH, "SYNTH-dr-01", "clinician", ep, "medicine"); e.open_episode(synthetic, TS)
+    assert e.step({"type": "approve", "timestamp": TS})["accepted"]
+    return e
 
-def test_r5_04_cli_export_refuses_real_episode(tmp_path, capsys):
-    log = str(tmp_path / "l.jsonl"); open(log, "w").close()
-    assert F.main(["f", "export", PH, log, "EP-1"]) == 2 and capsys.readouterr().err.strip() == msg("RF-EXPORT-REAL")
+def test_r8_01_export_needs_synthetic_flag_not_id():
+    e = F.FormEnv(); e.reset(PH, "SYNTH-x", "patient", EP)
+    e.replay([x for x in opened(True).log if x["type"] != "open"])
+    with pytest.raises(Invalid) as x:
+        e.export()
+    assert str(x.value) == msg("RF-EXPORT-REAL")
+    with pytest.raises(Invalid) as x:
+        opened(False).export()
+    assert str(x.value) == msg("RF-EXPORT-REAL")
+    assert opened(True, "EP-0001").export()["synthetic"] is True     # the field decides, never the id
+
+def test_r8_01_flag_set_once_first_and_never_changed():
+    e = opened(True)
+    for v in (True, False):
+        with pytest.raises(Invalid):
+            e.open_episode(v, TS)
+    for v in (1, "true", None):
+        f = F.FormEnv(); f.reset(PH, "SYNTH-x", "patient", EP)
+        with pytest.raises(Invalid):
+            f.open_episode(v, TS)
+
+@pytest.mark.parametrize("change", ["second_open", "flip", "not_first", "extra_key", "other_episode"])
+def test_r8_01_replay_refuses_changed_flag(change):
+    log = [dict(x) for x in opened(False).log]
+    if change == "second_open":
+        log.append(dict(log[0], synthetic=True))
+    elif change == "flip":
+        log.insert(1, dict(log[0], synthetic=True))
+    elif change == "not_first":
+        log = log[1:] + log[:1]
+    elif change == "extra_key":
+        log[0]["actor"] = "SYNTH-x"
+    else:
+        log[0]["episode_id"] = "SYNTH-EP-9"
+    f = F.FormEnv(); f.reset(PH, "SYNTH-x", "patient", EP)
+    with pytest.raises(Invalid):
+        f.replay(log)
+
+@pytest.mark.parametrize("role,kw", [("patient_agent", {"grant": True}), ("clinician_agent", {"scope": ("medicine",)}),
+                                     ("patient", {}), ("clinician", {"discipline": "medicine"})])
+def test_r8_01_only_harness_sets_flag(role, kw):
+    e = env(role=role, **kw); n = len(e.log)
+    assert e.call("open_episode", True, TS) == {"accepted": False, "reason": msg("RF-HARNESS-ONLY")}
+    assert e.step({"type": "open", "synthetic": True, "timestamp": TS})["accepted"] is False and len(e.log) == n
+
+def test_r8_01_cli_export_needs_flag(tmp_path, capsys):
+    log = str(tmp_path / "l.jsonl")
+    cli("approve", PH, log); capsys.readouterr()
+    assert F.main(["f", "export", PH, log, EP]) == 2 and capsys.readouterr().err.strip() == msg("RF-EXPORT-REAL")
+    assert F.main(["f", "open", PH, log, EP, "--synthetic", "true", "--ts", TS]) == 2   # only as the first event
+
+def test_r8_03_queue_lists_number_and_text():
+    e = env(role="patient_agent", grant=True); e.step(ans("smokes", True)); fail_n(e, 3)
+    want = "; ".join(f"{n}. {e.q[i]['text']}" for n, i in enumerate(e.ids, 1) if i != "allergy_reaction_severe")
+    assert e.check()["clinician_queue"][0] == msg("CQ-THREE-FAILS", items=want)
+    assert "1. " + e.q["allergy_any"]["text"] in want
+
+def test_r8_04_interpreter_clinician_only():
+    c = env(role="clinician", discipline="medicine")
+    assert c.step(dict(ans("smokes", True), interpreter=True))["accepted"] and c.log[-1]["interpreter"] is True
+    for role, kw in (("patient", {}), ("patient_agent", {"grant": True}), ("clinician_agent", {"scope": ("medicine",)})):
+        e = env(role=role, **kw); n = len(e.log)
+        assert e.step(dict(ans("smokes", True), interpreter=False))["accepted"] is False and len(e.log) == n
+
+@pytest.mark.parametrize("v", [1, 0, "true", None])
+def test_r8_04_interpreter_strict_bool(v):
+    c = env(role="clinician", discipline="medicine")
+    assert c.step(dict(ans("smokes", True), interpreter=v)) == {"accepted": False, "reason": msg("RF-NOT-BOOL")}
+
+def test_r8_04_export_carries_interpreter(tmp_path, capsys):
+    e = opened(True); e.step(dict(ans("smokes", True), interpreter=True)); e.step(ans("allergy_any", False))
+    assert e.export()["interpreter"] == {"smokes": True, "allergy_any": False}
+    log = str(tmp_path / "l.jsonl")
+    with open(log, "w") as f:
+        f.writelines(json.dumps(x) + "\n" for x in e.log[:2])
+    assert cli("answer", PH, log, "smokes=true", "--interpreter", "true") == 1; capsys.readouterr()
+    assert F.main(["f", "export", PH, log, EP]) == 0
+    assert json.loads(capsys.readouterr().out)["interpreter"] == {"smokes": True}
+    assert cli("answer", PH, log, "allergy_any=true", "--interpreter", "yes") == 2
+
+# ---- round 8: alert to queue, follow-up questions, named grants ----
+SD = __import__("messages").SAMEDAY_STATUS
+
+def sd_line(i, k, status):
+    return msg("CQ-SAMEDAY-ALERT", item_id=i, event_id=k, status=status)
+
+def finish_others(e):
+    for i in ("takes_blood_thinner", "smokes", "pregnant_possible"):
+        assert e.step(ans(i, False))["accepted"]
+
+def test_r8_05_confirmed_yes_queues_and_blocks_close():
+    e = env(); e.step(ans("allergy_any", True)); k = len(e.log) - 1
+    e.step(ans("allergy_reaction_severe", False)); finish_others(e)
+    c = e.check()
+    assert c["alerts"] == ["allergy_any"] and sd_line("allergy_any", k, SD["confirmed"]) in c["clinician_queue"]
+    assert sd_line("allergy_any", k, SD["confirmed"]) in c["blocked"] and c["complete"] is False
+    assert e.patient_view()["sameday"] == msg("PV-SAMEDAY") and e.step(act("submit"))["final"] is False
+    r = as_role(e, "clinician", "medicine"); assert r.step(act("review"))["accepted"]
+    assert r.check()["complete"] and r.check()["alerts"] == [] and r.step(act("submit"))["final"] is True
+
+def test_r8_05_status_unconfirmed_then_confirmed():
+    a = env(role="patient_agent", grant=True); a.step(ans("allergy_any", True)); k = len(a.log) - 1
+    assert a.check()["clinician_queue"][0] == sd_line("allergy_any", k, SD["unconfirmed"])
+    assert "sameday" not in a.patient_view()
+    p = as_role(a, "patient"); assert p.step(act("confirm", "allergy_any"))["accepted"]
+    assert sd_line("allergy_any", k, SD["confirmed"]) in p.check()["clinician_queue"]
+    assert p.patient_view()["sameday"] == msg("PV-SAMEDAY")
+
+def test_r8_05_status_declined():
+    e = env(); e.step(act("decline", "allergy_any")); k = len(e.log) - 1
+    assert e.check()["alerts"] == ["allergy_any"] and sd_line("allergy_any", k, SD["declined"]) in e.check()["clinician_queue"]
+    assert e.patient_view()["sameday"] == msg("PV-SAMEDAY")
+
+def test_r8_05_status_answer_unknown_at_submission():
+    e = env(); assert "sameday" not in e.patient_view() and e.check()["alerts"] == []
+    e.step(act("submit")); k = len(e.log) - 1
+    assert e.check()["alerts"] == ["allergy_any"]       # the follow-up waits, so it is not unknown yet
+    assert sd_line("allergy_any", k, SD["unknown"]) in e.check()["clinician_queue"]
+    assert e.patient_view()["sameday"] == msg("PV-SAMEDAY")
+    e.step(act("submit")); assert sd_line("allergy_any", k, SD["unknown"]) in e.check()["clinician_queue"]
+
+def test_r8_05_status_changed_stays_until_review():
+    e = env(); e.step(ans("allergy_any", True)); k = len(e.log) - 1; e.step(ans("allergy_any", False))
+    c = e.check()
+    assert c["alerts"] == ["allergy_any"] and sd_line("allergy_any", k, SD["changed"]) in c["clinician_queue"]
+    v = e.patient_view()
+    assert v["allergy_any"] == msg("PV-ANS-SELF") + " " + msg("PV-ANS-CHANGED") and "sameday" not in v
+    r = as_role(e, "clinician", "medicine"); r.step(act("review"))
+    assert r.check()["alerts"] == [] and r.patient_view()["allergy_any"] == msg("PV-ANS-SELF")
+
+def test_r8_05_no_without_entry_does_not_queue():
+    e = env(); e.step(ans("allergy_any", False)); assert e.check()["alerts"] == []
+
+def test_r8_05_non_safety_question_does_not_queue():
+    e = env(); e.step(ans("smokes", True)); e.step(act("decline", "pregnant_possible"))
+    assert e.check()["alerts"] == [] and "sameday" not in e.patient_view()
+
+def test_r8_05_clinician_form_confirm():
+    e = env(PP, "clinician_agent", scope=("medicine",))
+    q = next(i for i in e.ids if e.q[i]["safety_critical"])
+    assert e.step(ans(q, e.q[q]["alert_answer"]))["accepted"] and e.check()["alerts"] == [q]
+    assert e.check()["clinician_queue"][0].endswith(SD["unconfirmed"] + ". The form stays open until you review it.")
+    c = as_role(e, "clinician", "medicine"); assert c.step(act("confirm", q))["accepted"]
+    assert c.check()["clinician_queue"][0].endswith(SD["confirmed"] + ". The form stays open until you review it.")
+
+def test_r8_05_new_trigger_after_review_needs_new_review():
+    e = env(); e.step(ans("allergy_any", True))
+    c = as_role(e, "clinician", "medicine"); c.step(act("review")); assert c.check()["alerts"] == []
+    c.step(ans("allergy_any", False)); assert c.check()["alerts"] == []
+    c.step(ans("allergy_any", True)); assert c.check()["alerts"] == ["allergy_any"]
+
+def test_r8_05_review_only_clinician_and_only_when_needed():
+    e = env(); assert as_role(e, "clinician", "medicine").step(act("review"))["reason"] == "ERR:nothing_to_review"
+    e.step(ans("allergy_any", True))
+    assert e.step(act("review"))["accepted"] is False
+    assert as_role(e, "clinician_agent", scope=("medicine",)).step(act("review"))["accepted"] is False
+
+def test_r8_06_follow_up_waits_while_parent_blank():
+    e = env(); c = e.check()
+    assert "allergy_reaction_severe" in c["waiting"] and "allergy_reaction_severe" not in c["open"]
+    assert c["answers"]["allergy_reaction_severe"] == "waiting"
+    assert msg("CQ-WAITING-PARENT", n=1, parent_text=e.q["allergy_any"]["text"], m=2,
+               text=e.q["allergy_reaction_severe"]["text"]) in c["clinician_queue"]
+
+@pytest.mark.parametrize("parent", ["yes", "declined", "unknown"])
+def test_r8_06_follow_up_missing_when_parent_yes_declined_or_unknown(parent):
+    e = env(role="patient_agent", grant=True) if parent == "unknown" else env()
+    if parent == "declined":
+        e.step(act("decline", "allergy_any"))
+    else:
+        e.step(ans("allergy_any", True if parent == "yes" else False))   # unknown: agent's unconfirmed answer
+    c = e.check()
+    assert "allergy_reaction_severe" in c["open"] and c["waiting"] == []
+
+def test_r8_06_follow_up_not_needed_only_when_parent_no():
+    e = env(); e.step(ans("allergy_any", False)); c = e.check()
+    assert "allergy_reaction_severe" in c["not_applicable"] and c["waiting"] == [] and "allergy_reaction_severe" not in c["open"]
+
+def test_r8_07_grant_names_agent_and_patient():
+    p = env()
+    assert p.step(grant_ev(agent=""))["reason"] == ""                       # patients never see machine codes
+    assert p.step(grant_ev(patient="SYNTH-pt-99"))["accepted"] is False
+    assert p.step(grant_ev())["accepted"] and p.log[-1]["agent"] == AGENT and p.log[-1]["patient"] == "SYNTH-pt-01"
+    assert p.step(grant_ev(agent="SYNTH-agent-02", patient="SYNTH-pt-01"))["accepted"]
+
+def test_r8_07_other_patient_cannot_grant_on_this_episode():
+    p = env(grant=True)
+    q = F.FormEnv(); q.reset(PH, "SYNTH-pt-99", "patient", EP); q.replay(p.log)
+    assert q.step(grant_ev(agent="SYNTH-agent-09", patient="SYNTH-pt-99"))["accepted"] is False
+
+def test_r8_07_agent_not_named_gets_no_grant_and_not_yours():
+    p = env(grant=True)
+    o = F.FormEnv(); o.reset(PH, "SYNTH-agent-02", "patient_agent", EP); o.replay(p.log)
+    assert o.step(ans("smokes", True)) == {"accepted": False, "reason": msg("RF-NO-GRANT")}
+    assert o.observe() == {"accepted": False, "reason": msg("RF-NOT-YOURS")}
+    assert as_role(p, "patient_agent").observe()["form_id"]
+
+def test_r8_07_revoke_names_agent_and_needs_active_grant():
+    p = env(grant=True)
+    assert p.step(grant_ev("revoke", agent="SYNTH-agent-02"))["accepted"] is False
+    assert p.step(grant_ev("revoke"))["accepted"] and p.step(grant_ev("revoke"))["accepted"] is False
+    assert as_role(p, "patient_agent").observe()["reason"] == msg("RF-NOT-YOURS")
+
+def test_r8_07_cli_grant_names_agent(tmp_path):
+    log = str(tmp_path / "l.jsonl"); cli("approve", PH, log)
+    base = ["f", "grant", PH, log, EP, "--role", "patient", "--actor", "SYNTH-pt-01", "--ts", TS]
+    assert F.main(base) == 2 and F.main(base + ["--agent", AGENT]) == 1
+    assert F.read_log(log)[-1]["agent"] == AGENT
+
+
+def close_sd(i, status):
+    return {"type": "close_sameday", "question_id": i, "status": status, "timestamp": TS}
+
+@pytest.mark.parametrize("status", list(SD.values()))
+def test_r8_09_clinician_closes_entry_with_each_signed_status(status):
+    e = env(); e.step(ans("allergy_any", True)); e.step(ans("allergy_reaction_severe", False)); finish_others(e)
+    assert e.step(act("submit"))["final"] is False
+    c = as_role(e, "clinician", "medicine")
+    assert c.step(close_sd("allergy_any", status))["accepted"] and c.log[-1]["status"] == status
+    k = c.check(); assert k["alerts"] == [] and k["sameday_closed"] == {"allergy_any": status} and k["complete"]
+    assert c.step(act("submit"))["final"] is True
+    f = F.FormEnv(); f.reset(PH, "SYNTH-x", "patient", EP); f.replay(c.log); assert f.check()["complete"]
+
+def test_r8_09_close_confirmed_on_allergy_any_unblocks_submit():
+    a = env(role="patient_agent", grant=True); a.step(ans("allergy_any", True))
+    p = as_role(a, "patient"); p.step(act("confirm", "allergy_any")); p.step(ans("allergy_reaction_severe", False)); finish_others(p)
+    assert p.step(act("submit"))["final"] is False
+    c = as_role(p, "clinician", "medicine"); assert c.step(close_sd("allergy_any", "confirmed"))["accepted"]
+    assert as_role(c, "patient").step(act("submit")) == {"accepted": True, "result": msg("ST-CHECK-PASS"), "final": True}
+
+def test_r8_09_close_refusals():
+    e = env(); e.step(ans("allergy_any", True)); e.step(act("decline", "takes_blood_thinner"))
+    c = as_role(e, "clinician", "medicine")
+    for bad in ("Confirmed", "confirmed.", "", "ok", None):
+        assert c.step(close_sd("allergy_any", bad))["accepted"] is False
+    assert c.step(close_sd("smokes", "confirmed"))["reason"] == "ERR:nothing_to_close"
+    assert c.step(close_sd("ghost", "confirmed"))["accepted"] is False
+    for role, scope in (("patient", ()), ("patient_agent", ()), ("clinician_agent", ("medicine",))):
+        assert as_role(e, role, scope=scope).step(close_sd("allergy_any", "confirmed"))["accepted"] is False
+    assert c.step(close_sd("allergy_any", "confirmed"))["accepted"] and c.check()["alerts"] == []
+    assert c.step(close_sd("allergy_any", "confirmed"))["reason"] == "ERR:nothing_to_close"
+
+def test_r8_09_close_one_entry_leaves_others():
+    e2 = env(PP, "clinician", discipline="medicine")
+    qs = [i for i in e2.ids if e2.q[i]["safety_critical"]][:2]
+    for q in qs:
+        e2.step(ans(q, e2.q[q]["alert_answer"]))
+    assert e2.step(close_sd(qs[0], "confirmed"))["accepted"] and e2.check()["alerts"] == [qs[1]]
+
+def test_r8_09_cli_close_sameday(tmp_path):
+    log = str(tmp_path / "l.jsonl"); cli("approve", PH, log)
+    cli("answer", PH, log, "allergy_any=true")
+    assert cli("close_sameday", PH, log, "allergy_any") == 2
+    assert F.main(["f", "close_sameday", PH, log, EP, "allergy_any", "--status", "confirmed", "--role", "clinician",
+                   "--actor", "SYNTH-x", "--ts", TS, "--discipline", "medicine"]) == 1
+    assert F.read_log(log)[-1]["status"] == "confirmed"
+
+@pytest.mark.parametrize("bad", [42, "answer", None, {"type": "erase"}])
+def test_replay_refuses_malformed_log_lines(bad):
+    f = F.FormEnv(); f.reset(PH, "SYNTH-x", "patient", EP)
+    with pytest.raises(Invalid):
+        f.replay(approval(PH) + [bad])
+
+def test_replay_reports_the_refusal_line():
+    a = env(role="patient_agent", grant=True); a.step(ans("smokes", True))
+    log = [x for x in a.log if x["type"] != "grant"]
+    f = F.FormEnv(); f.reset(PH, "SYNTH-x", "patient", EP)
+    with pytest.raises(Invalid) as x:
+        f.replay(log)
+    assert str(x.value) == msg("RF-NO-GRANT")
+
+# ---- round 9: alert_route ----
+def routed(route="before_procedure", qid="allergy_any"):
+    d = copy.deepcopy(SPH); next(q for q in d["question"] if q["id"] == qid)["alert_route"] = route
+    return d
+
+def bp_line(i, k, status):
+    return msg("CQ-BEFORE-PROC", item_id=i, event_id=k, status=status)
+
+def test_r9_01_route_defaults_to_same_day():
+    e = env(); assert e.route("allergy_any") == "same_day"
+    e.step(ans("allergy_any", True)); k = len(e.log) - 1
+    assert e.check()["clinician_queue"][-1] == sd_line("allergy_any", k, SD["confirmed"])
+    v = e.patient_view(); assert v["sameday"] == msg("PV-SAMEDAY") and "before_procedure" not in v
+
+def test_r9_01_explicit_same_day_same_as_default():
+    e = env(routed("same_day")); e.step(ans("allergy_any", True)); k = len(e.log) - 1
+    assert sd_line("allergy_any", k, SD["confirmed"]) in e.check()["clinician_queue"]
+
+def test_r9_02_before_procedure_yes_queues_and_shows_patient_line():
+    e = env(routed()); e.step(ans("allergy_any", True)); k = len(e.log) - 1
+    c = e.check()
+    assert bp_line("allergy_any", k, SD["confirmed"]) in c["clinician_queue"] and bp_line("allergy_any", k, SD["confirmed"]) in c["blocked"]
+    assert not any(x.startswith("Same-day review needed") for x in c["clinician_queue"])
+    v = e.patient_view(); assert v["before_procedure"] == msg("PV-BEFORE-PROC") and "sameday" not in v
+
+@pytest.mark.parametrize("case", ["unconfirmed", "confirmed", "changed", "declined", "unknown"])
+def test_r9_02_before_procedure_each_status(case):
+    if case in ("unconfirmed", "confirmed"):
+        e = env(routed(), role="patient_agent", grant=True); e.step(ans("allergy_any", True)); k = len(e.log) - 1
+        if case == "confirmed":
+            e = as_role(e, "patient"); e.step(act("confirm", "allergy_any"))
+    elif case == "changed":
+        e = env(routed()); e.step(ans("allergy_any", True)); k = len(e.log) - 1; e.step(ans("allergy_any", False))
+    elif case == "declined":
+        e = env(routed()); e.step(act("decline", "allergy_any")); k = len(e.log) - 1
+    else:
+        e = env(routed()); e.step(act("submit")); k = len(e.log) - 1
+    assert bp_line("allergy_any", k, SD[case]) in e.check()["clinician_queue"]
+    shown = "before_procedure" in e.patient_view()
+    assert shown is (case in ("confirmed", "declined", "unknown"))
+
+def test_r9_02_patient_decline_counts_as_confirmed_and_shows_at_once():
+    e = env(routed()); e.step(act("decline", "allergy_any"))
+    assert e.patient_view()["before_procedure"] == msg("PV-BEFORE-PROC")
+
+def test_r9_02_clinician_yes_counts_as_confirmed_at_once():
+    e = env(routed(), role="clinician", discipline="medicine"); e.step(ans("allergy_any", True)); k = len(e.log) - 1
+    assert bp_line("allergy_any", k, SD["confirmed"]) in e.check()["clinician_queue"]
+    assert e.patient_view()["before_procedure"] == msg("PV-BEFORE-PROC")
+
+def test_r9_02_before_procedure_blocks_until_clinician_closes():
+    e = env(routed()); e.step(ans("allergy_any", True)); e.step(ans("allergy_reaction_severe", False)); finish_others(e)
+    assert e.step(act("submit"))["final"] is False
+    c = as_role(e, "clinician", "medicine"); assert c.step(close_sd("allergy_any", "confirmed"))["accepted"]
+    assert c.step(act("submit"))["final"] is True
+
+def test_r9_03_alert_route_only_on_safety_questions_and_signed_values():
+    assert bad_schema(lambda d: d["question"][3].update(alert_route="same_day")) == msg("ER-BAD-FIELD", field="alert_route", item="question 4")
+    for v in ("before-procedure", "", "today", True):
+        assert bad_schema(lambda d: d["question"][0].update(alert_route=v)) == msg("ER-BAD-FIELD", field="alert_route", item="question 1")
+    F.check_schema(routed()); F.check_schema(routed("same_day"))
+
+def test_r9_04_waiting_parent_signed_text():
+    e = env(); line = e.check()["clinician_queue"][-1]
+    assert line == "Waiting on Q1: " + e.q["allergy_any"]["text"] + " Then ask Q2: " + e.q["allergy_reaction_severe"]["text"]
+    assert "?." not in line and not line.endswith("?.")
+
+def test_no_question_mark_full_stop_in_any_queue_or_view():
+    for case in (PH, PP, FR):
+        e = env(case, role="clinician", discipline="medicine", approve="medicine"); e.step(act("submit"))
+        for x in e.check()["clinician_queue"] + e.check()["blocked"] + e.check()["flags"] + list(env(case).patient_view().values()):
+            assert "?." not in x
+
+def test_r9_02_clinician_yes_still_needs_review_even_by_same_clinician():
+    c = env(routed(), role="clinician", discipline="medicine")
+    c.step(ans("allergy_any", True)); c.step(ans("allergy_reaction_severe", False)); finish_others(c)
+    assert c.patient_view()["before_procedure"] == msg("PV-BEFORE-PROC")
+    assert c.check()["complete"] is False and c.step(act("submit"))["final"] is False
+    assert c.step(act("review"))["accepted"] and c.step(act("submit"))["final"] is True
+
+# ---- sensitive questions ----
+def test_r9_05_sensitive_is_optional_strict_bool():
+    d = copy.deepcopy(SPH); d["question"][2]["sensitive"] = True; F.check_schema(d)
+    for v in (1, "true", None):
+        assert bad_schema(lambda d: d["question"][2].update(sensitive=v)) == msg("RF-NOT-BOOL")
+
+def test_r9_05_export_lists_sensitive_questions_and_queue_never_quotes_answer():
+    d = copy.deepcopy(SPH); d["question"][0]["sensitive"] = True; d["question"][3]["sensitive"] = False
+    e = F.FormEnv(); e.reset(d, "SYNTH-dr-01", "clinician", EP, "medicine"); e.open_episode(True, TS)
+    e.step({"type": "approve", "timestamp": TS}); e.step(ans("allergy_any", True))
+    x = e.export(); assert x["sensitive"] == ["allergy_any"]
+    assert all("Yes" not in q and e.q["allergy_any"]["text"] not in q for q in x["clinician_queue"] if q.startswith("Same-day"))
+    assert opened(True).export()["sensitive"] == []
+
+
+def test_r9_06_waiting_parent_reappears_after_every_failed_submit():
+    e = env(role="patient_agent", grant=True)
+    want = msg("CQ-WAITING-PARENT", n=1, parent_text=e.q["allergy_any"]["text"], m=2, text=e.q["allergy_reaction_severe"]["text"])
+    for _ in range(3):
+        r = e.step(act("submit")); assert r["final"] is False and r["missing"].count(want) == 1
+        assert e.check()["clinician_queue"].count(want) == 1
+    p = as_role(e, "clinician", "medicine"); p.step(act("review")); p.step(ans("allergy_any", True))
+    r = p.step(act("submit")); assert want not in r["missing"] and want not in p.check()["clinician_queue"]
+
+# ---- build checks refuse wrong types with a line, never a crash ----
+@pytest.mark.parametrize("mut,field,item", [
+    (lambda d: d.update(form_id=7), "form_id", "schema"),
+    (lambda d: d.update(question=5), "question", "schema"),
+    (lambda d: d["question"][0].update(id=7), "id", "question 1"),
+    (lambda d: d["question"][0].update(version=7), "version", "question 1"),
+    (lambda d: d["question"][0].update(text=7), "text", "question 1"),
+    (lambda d: d["question"][3].update(disciplines=["medicine"]), "disciplines", "question 4"),
+    (lambda d: d["question"][1].update(ask_if=5), "ask_if", "question 2"),
+])
+def test_build_refuses_wrong_types(mut, field, item):
+    assert bad_schema(mut) == msg("ER-BAD-FIELD", field=field, item=item)
+
+
+def test_step_return_shapes():
+    e = env(role="clinician", discipline="medicine")
+    n0 = len(e.log)
+    r = e.step({"type": "answer", "question_id": "q1", "value": True, "role": "clinician"})
+    _ = n0 = len(e.log)
+    assert r["accepted"] is False and r["reason"] == F.code("role_fixed_at_session_open") and len(e.log) == n0
+    n = e.step({"type": "next"})
+    assert n["accepted"] is True
+    f = e.step(act("submit"))
+    assert f["accepted"] is True and f["final"] is False
+
+
+@pytest.mark.parametrize("bad", [[], [""], [5]])
+def test_build_refuses_bad_disciplines(bad):
+    def m(d):
+        q = next(q for q in d["question"] if q["safety_critical"]); q["disciplines"] = bad
+    assert bad_schema(m).startswith("Setup error: disciplines")
