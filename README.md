@@ -84,7 +84,7 @@ Everything a person sees comes from `WORDING.md`: the signed line ids and wordin
 
 ```bash
 python3 scripts/rulecheck.py                  # exit 0: every rule has a test, WORDING.md matches its hash, register rows match it
-python3 scripts/mutate.py forms.py _gate     # exit 0: every mutant of the gate is caught
+python3 scripts/mutate.py     # exit 0: every mutant of every function in safety_functions.toml is caught
 ```
 
 The tests check `WORDING.md` against its header hash and check that every line id used in the code exists in it. Before pushing, maintainers run `python3 scripts/prepush.py SIGNED_TABLE.md`, which compares `WORDING.md` with the signed table and fails on internal names or local paths.

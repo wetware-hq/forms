@@ -37,7 +37,7 @@ Normative rules for agents that operate or modify forms. Wording uses RFC 2119: 
 
 - `python3 -m pytest -q` and `python3 scripts/rulecheck.py` **MUST** both exit 0 before every commit. A commit **MUST NOT** be made while any test fails.
 - Every rule **MUST** be a row in `RULES.md` with signer, class, protected role and at least one test that plants its failure.
-- Changes to the gate or permission table **SHOULD** be followed by `python3 scripts/mutate.py forms.py _gate`, which **MUST** catch every mutant.
+- Changes to the gate or permission table **SHOULD** be followed by `python3 scripts/mutate.py` (it mutates every function in `safety_functions.toml`, plus wrong-line and session-change mutants), which **MUST** catch every mutant.
 - Non-negotiables (roles, scope of practice, approval, evidence, wording) **MUST** be enforced by deterministic code in the gate and checker. They **MUST NOT** depend on a model, a prompt or a reviewer's judgement.
 - The event log is append-only. Code **MUST NOT** rewrite, reorder or delete log lines. A correction is a new event. State **MUST** be rebuilt by replay, and the same log **MUST** give the same state.
 - Every string a person sees **MUST** come from `WORDING.md`, which **MUST** only be regenerated with `scripts/sync_wording.py` from the signed table, never edited by hand. `messages.py` **MUST NOT** hold wording. Lines not yet signed go in the pending section of `WORDING.md` and are reported by rulecheck.

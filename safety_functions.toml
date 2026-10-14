@@ -1,0 +1,36 @@
+# Every function that implements a safety row (refusal, line mapping, queue entry, session/log write).
+# tests/test_safety_functions.py fails the build if one is missing; scripts/mutate.py mutates exactly this list.
+module = "forms.py"
+# Also listed: safety-row functions the scan cannot see (read scope, routing, readiness, hashes).
+functions = [
+    "_applicable",
+    "_contact_today",
+    "_fold",
+    "_gate",
+    "_refuse",
+    "_resolved",
+    "_sameday",
+    "_waiting_parent",
+    "allowed_disciplines",
+    "call",
+    "check",
+    "check_schema",
+    "cli_bool",
+    "clinician_queue",
+    "export",
+    "load_schema",
+    "main",
+    "observe",
+    "open_episode",
+    "opts",
+    "patient_view",
+    "propose_form",
+    "read_log",
+    "replay",
+    "reset",
+    "route",
+    "schema_hash",
+    "set_two_item_ok",
+    "step",
+    "visible",
+]

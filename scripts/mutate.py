@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Simple mutation testing of the gate and permission code. For each mutant: flip a comparison,
-swap and/or, drop a 'not', flip a True/False, remove a guard return, or remove one action from the
-permission table. Then run pytest on a copy. A mutant is killed when pytest fails.
-Usage: scripts/mutate.py MODULE.py func[,func...]   Exit 0 only if every mutant is killed."""
-import ast, copy, pathlib, shutil, subprocess, sys, tempfile
+"""Mutation testing of every safety function listed in safety_functions.toml (no hand-picked list).
+For each mutant: flip a comparison, swap and/or, drop a 'not', flip a True/False, remove a guard return,
+remove one action from the permission table, map a PATIENT_LINE code to a wrong signed line, or make a
+refusal touch the session, log or role. Then run pytest on a copy. A mutant is killed when pytest fails.
+Usage: scripts/mutate.py   Exit 0 only if every mutant is killed."""
+import ast, copy, pathlib, shutil, subprocess, sys, tempfile, tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FLIP = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.In: ast.NotIn, ast.NotIn: ast.In, ast.Is: ast.IsNot,
@@ -28,7 +29,18 @@ def sites(tree, funcs):
         if isinstance(f, ast.Assign) and getattr(f.targets[0], "id", "") == "PERMS":
             for kv, v in zip(f.value.keys, f.value.values):
                 out += [("perm", v, k) for k in range(len(v.elts))]
+        if isinstance(f, ast.Assign) and getattr(f.targets[0], "id", "") == "PATIENT_LINE":
+            out += [("line", f.value, k) for k in range(len(f.value.values))]
+        if isinstance(f, ast.FunctionDef) and f.name == "_refuse" and f.name in funcs:
+            out += [("sess", f, k) for k in range(len(SESSION_HITS))]
     return out
+
+
+# A refusal must leave session, log and role untouched: each of these is injected before _refuse returns.
+SESSION_HITS = ["self.log.append(dict(self.log[-1]) if self.log else {'type': 'x'})", "self.log[-1:] = []",
+                "object.__setattr__(self.session, 'role', 'clinician')",
+                "object.__setattr__(self.session, 'actor', 'SYNTH-other')",
+                "object.__setattr__(self.session, 'scope', ('x',))"]
 
 
 class Unnot(ast.NodeTransformer):
@@ -53,6 +65,14 @@ def mutate(src, funcs, i):
         n.value = not n.value
     elif kind == "guard":
         n.body = [ast.Pass()]
+    elif kind == "line":
+        vals = sorted({v.value for v in n.values})
+        v = n.values[k]
+        kind += ":" + n.keys[k].value
+        v.value = next(x for x in vals if x != v.value)
+    elif kind == "sess":
+        kind += ":" + SESSION_HITS[k]
+        n.body.insert(len(n.body) - 1, ast.parse(SESSION_HITS[k]).body[0])
     elif kind == "perm":
         kind += ":" + n.elts[k].value
         del n.elts[k]
@@ -62,7 +82,11 @@ def mutate(src, funcs, i):
 
 
 def main(argv):
-    mod, funcs = argv[1], set(argv[2].split(","))
+    if len(argv) != 1:
+        print(__doc__, file=sys.stderr)
+        return 2
+    cfg = tomllib.loads((ROOT / "safety_functions.toml").read_text())
+    mod, funcs = cfg["module"], set(cfg["functions"])
     src = (ROOT / mod).read_text()
     total = len(sites(ast.parse(src), funcs))
     survivors = []
