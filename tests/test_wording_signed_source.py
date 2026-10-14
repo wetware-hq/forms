@@ -13,8 +13,13 @@ SIGNED_ROW_COUNT = 123
 
 def test_every_wording_line_matches_signed_source():
     sib = pathlib.Path(os.environ.get("STACK_SIBLINGS_DIR") or ROOT.parent)
-    signed = dict(sync_wording.signed_rows((sib / "wording" / "forms_orders_lines_SIGNED.md").read_text()))
+    raw = (sib / "wording" / "forms_orders_lines_SIGNED.md").read_bytes().decode("utf-8")
+    # byte-exact: the wording cell is taken raw (one pad space each side, nothing else stripped)
+    cells = {k: rest.rstrip("\r").split("|")[-2] if rest.rstrip().endswith("|") else rest.split("|")[-1]
+             for k, rest in __import__("re").findall(r"^\| ([A-Z]{2,4}-[A-Z0-9-]+) \|(.*)$", raw, __import__("re").M)}
+    assert all(c.startswith(" ") and c.endswith(" ") for c in cells.values()), "signed cell padding is not one space"
+    signed = {k: c[1:-1] for k, c in cells.items()}
     body = (ROOT / "WORDING.md").read_text().split("## Pending signature")[0]
-    have = dict(sync_wording.ROW.findall(body))
+    have = dict(__import__("re").findall(r"^\| ([A-Z]{2,4}-[A-Z0-9-]+) \| (.*) \|$", body, __import__("re").M))
     assert len(signed) == SIGNED_ROW_COUNT, f"signed file has {len(signed)} rows, committed count is {SIGNED_ROW_COUNT}"
     assert have and have == signed
