@@ -1,4 +1,4 @@
-# Fixed lines for forms and orders (SIGNED by Physician, 51 lines; Educator drafted, Patient reviewed)
+# Fixed lines for forms and orders (SIGNED by Physician, 58 lines; Educator drafted, Patient reviewed)
 Every line is a fixed string. Text in [ ] is filled only from signed table fields, never from raw rules or ids.
 
 ## Patient view (signed, with Patient's change)
@@ -87,6 +87,17 @@ Every line is a fixed string. Text in [ ] is filled only from signed table field
 | parent | Your parent | Parent |
 | guardian | Your guardian | Guardian |
 | sdm | The person legally allowed to decide for you | Substitute decision-maker (the local legal term, such as healthcare proxy in the US) |
+
+## Round 5 (signed by Physician, reviewed by Patient)
+| id | line |
+|---|---|
+| RF-HARNESS-ONLY | Refused: only the system running this session can start it again or replay it. |
+| RF-NOT-YOURS | Refused: you don't have access to this. |
+| RF-EXPORT-REAL | Refused: only synthetic sessions can be exported. |
+| ST-CHECK-PASS | Submitted and checked: complete. This result is final. |
+| ST-CHECK-FAIL | Submitted and checked: not complete yet. See what's missing below. |
+| CQ-THREE-FAILS | For a clinician to check: this was submitted 3 times without passing. Missing: [items]. |
+| RF-WAIT-CLINICIAN | Refused: a clinician must look at this before it can be submitted again. |
 
 ## README known limit (signed: Physician wrote it, Patient and Educator reviewed it)
 Version 1 gives parents, guardians and substitute decision-makers no session of their own. When one answers, a clinician records it in their own session and picks the role from a fixed list. The patient then sees who answered for them. Never use the patient's session for this.

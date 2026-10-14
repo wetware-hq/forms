@@ -233,10 +233,10 @@ def test_roles_are_four_with_discipline():
 
 def test_permissions_table_by_role():
     assert F.PERMS == {
-        "patient": {"answer", "decline", "confirm", "grant", "revoke", "next"},
-        "patient_agent": {"answer", "next"},
-        "clinician": {"answer", "confirm", "approve", "next"},
-        "clinician_agent": {"answer", "next"}}
+        "patient": {"answer", "decline", "confirm", "grant", "revoke", "submit", "next"},
+        "patient_agent": {"answer", "submit", "next"},
+        "clinician": {"answer", "confirm", "approve", "submit", "review", "next"},
+        "clinician_agent": {"answer", "submit", "next"}}
     for role, allowed in F.PERMS.items():
         assert allowed <= set(F.FIELDS) | {"next"} and role in F.DENY
     assert "approve" in F.PERMS["clinician"] and "approve" not in F.PERMS["clinician_agent"]
@@ -535,3 +535,102 @@ def test_p01_confirmed_agent_answer_drops_confirm_prompt():
     assert a.patient_view()["smokes"] == msg("PV-ANS-AGENT") + " " + msg("PV-CONFIRM", yesno=False)
     p = as_role(a, "patient"); assert p.step(act("confirm", "smokes"))["accepted"]
     assert p.patient_view()["smokes"] == msg("PV-ANS-AGENT")
+
+
+# ---- round 5 ----
+ALL_Q = ("allergy_any", "allergy_reaction_severe", "takes_blood_thinner", "smokes", "pregnant_possible")
+
+def fail_n(e, n):
+    for _ in range(n):
+        r = e.step(act("submit")); assert r["accepted"] and r["final"] is False
+
+def test_r5_01_call_permissions_table():
+    assert F.CALL_PERMS == {r: {"observe", "step"} for r in ("patient", "patient_agent", "clinician", "clinician_agent")}
+
+@pytest.mark.parametrize("role,kw", [("patient_agent", {"grant": True}), ("clinician_agent", {"scope": ("medicine",)}),
+                                     ("patient", {}), ("clinician", {"discipline": "medicine"})])
+@pytest.mark.parametrize("method", ["reset", "replay", "check", "export", "patient_view"])
+def test_r5_01_harness_only_calls_refused(role, kw, method):
+    e = env(role=role, **kw); n = len(e.log)
+    assert e.call(method, []) == {"accepted": False, "reason": msg("RF-HARNESS-ONLY")} and len(e.log) == n
+
+@pytest.mark.parametrize("role,kw", [("patient_agent", {"grant": True}), ("clinician_agent", {"scope": ("medicine",)})])
+def test_r5_01_agents_may_observe_and_step(role, kw):
+    e = env(role=role, **kw)
+    assert e.call("observe")["form_id"] and e.call("step", ans("smokes", True))["accepted"]
+
+def test_r5_02_failed_submission_continues_and_is_logged():
+    e = env(); r = e.step(act("submit"))
+    assert r == {"accepted": True, "result": msg("ST-CHECK-FAIL"), "final": False, "missing": e.check()["blocked"]}
+    assert e.log[-1]["type"] == "submit" and e.log[-1]["result"] == "fail" and e.log[-1]["missing"] == list(ALL_Q)
+    assert e.step(ans("smokes", True))["accepted"] and e.check()["submissions"] == 1
+
+def test_r5_02_pass_is_final():
+    e = env(PP, "clinician", discipline="medicine")
+    for q in e.ids:
+        assert e.step(ans(q, False))["accepted"]
+    assert e.step(act("submit")) == {"accepted": True, "result": msg("ST-CHECK-PASS"), "final": True}
+    assert e.check()["final"] and e.step(ans(e.ids[0], True))["accepted"] is False
+
+@pytest.mark.parametrize("role,kw", [("patient_agent", {"grant": True}), ("clinician_agent", {"scope": ("medicine",)}),
+                                     ("patient", {}), ("clinician", {"discipline": "medicine"})])
+def test_r5_02_every_role_may_submit(role, kw):
+    e = env(role=role, **kw); assert e.step(act("submit"))["accepted"] and e.log[-1]["role"] == role
+
+def test_r5_02_three_fails_queue_and_wait():
+    e = env(role="patient_agent", grant=True); fail_n(e, 2)
+    assert e.check()["clinician_queue"] == [] and e.step(ans("smokes", True))["accepted"]
+    fail_n(e, 1)
+    missing = "question 1, question 2, question 3, question 4, question 5"   # smokes is not confirmed yet
+    assert e.check()["clinician_queue"] == [msg("CQ-THREE-FAILS", items=missing)]
+    for a in (act("submit"), ans("allergy_any", True)):
+        assert e.step(a) == {"accepted": False, "reason": msg("RF-WAIT-CLINICIAN")}
+    assert e.check()["submissions"] == 3
+
+def test_r5_02_clinician_review_unblocks_and_clinician_can_finish():
+    e = env(role="patient_agent", grant=True); fail_n(e, 3)
+    c = as_role(e, "clinician", "medicine")
+    assert c.step(ans("allergy_any", False))["accepted"]          # a clinician can always finish
+    assert c.step(act("review"))["accepted"] and c.check()["clinician_queue"] == []
+    assert as_role(c, "patient_agent").step(act("submit"))["accepted"]
+    assert env(role="clinician", discipline="medicine").step(act("review"))["reason"] == "ERR:nothing_to_review"
+    assert as_role(e, "patient").step(act("review"))["accepted"] is False
+
+def test_r5_02_submission_result_cannot_be_forged_and_replays():
+    e = env(); assert e.step(dict(act("submit"), result="pass"))["accepted"] is False
+    e.step(act("submit")); f = F.FormEnv(); f.reset(PH, "SYNTH-x", "patient", EP); f.replay(e.log)
+    assert f.log == e.log
+    bad = [dict(x) for x in e.log]; bad[-1]["result"] = "pass"
+    with pytest.raises(Invalid):
+        g = F.FormEnv(); g.reset(PH, "SYNTH-x", "patient", EP); g.replay(bad)
+
+def test_r5_03_observe_patient_sees_own_form():
+    assert env().observe()["form_id"] and env().observe("smokes")["accepted"]
+
+def test_r5_03_observe_patient_agent_only_granted_forms():
+    assert env(role="patient_agent").observe() == {"accepted": False, "reason": msg("RF-NOT-YOURS")}
+    assert env(role="patient_agent", grant=True).observe()["form_id"]
+    assert env(PP, "patient_agent", approve="medicine").observe() == {"accepted": False, "reason": msg("RF-NOT-YOURS")}
+
+def test_r5_03_observe_clinician_sees_all():
+    assert env(role="clinician", discipline="nursing").observe()["form_id"]
+
+def test_r5_03_observe_clinician_agent_only_its_scope():
+    assert env(role="clinician_agent", scope=("medicine",)).observe()["form_id"]
+    assert env(role="clinician_agent", scope=("nursing",)).observe() == {"accepted": False, "reason": msg("RF-NOT-YOURS")}
+    assert env(role="clinician_agent", scope=("nursing",), approve=None).observe()["reason"] == msg("RF-NOT-YOURS")
+
+def test_r5_03_not_yours_does_not_reveal_existence():
+    e = env(role="clinician_agent", scope=("nursing",)); m = env(role="clinician_agent", scope=("medicine",))
+    assert e.observe("smokes") == e.observe("no_such_item") == m.observe("no_such_item")
+    assert m.observe("smokes")["accepted"]
+
+def test_r5_04_export_refuses_real_episode():
+    with pytest.raises(Invalid) as x:
+        env(ep="EP-0001").export()
+    assert str(x.value) == msg("RF-EXPORT-REAL")
+    assert env().export()["bitsets"]
+
+def test_r5_04_cli_export_refuses_real_episode(tmp_path, capsys):
+    log = str(tmp_path / "l.jsonl"); open(log, "w").close()
+    assert F.main(["f", "export", PH, log, "EP-1"]) == 2 and capsys.readouterr().err.strip() == msg("RF-EXPORT-REAL")

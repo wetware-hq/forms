@@ -59,6 +59,13 @@ LINES = {
     "WT-WAITING": "Waiting: this job can start once [job text] is done.",
     "PV-ANS-CLIN": "Your care team answered: [discipline], on [date].",
     "PV-ANS-SDM": "[relationship] answered for you, recorded by your care team on [date].",
+    "RF-HARNESS-ONLY": "Refused: only the system running this session can start it again or replay it.",
+    "RF-NOT-YOURS": "Refused: you don't have access to this.",
+    "RF-EXPORT-REAL": "Refused: only synthetic sessions can be exported.",
+    "ST-CHECK-PASS": "Submitted and checked: complete. This result is final.",
+    "ST-CHECK-FAIL": "Submitted and checked: not complete yet. See what's missing below.",
+    "CQ-THREE-FAILS": "For a clinician to check: this was submitted 3 times without passing. Missing: [items].",
+    "RF-WAIT-CLINICIAN": "Refused: a clinician must look at this before it can be submitted again.",
 }
 # Signed list of legal decision-making roles: key -> (patient wording, clinician wording). No free text.
 RELATIONSHIP = {
@@ -67,19 +74,21 @@ RELATIONSHIP = {
     "sdm": ("The person legally allowed to decide for you",
             "Substitute decision-maker (the local legal term, such as healthcare proxy in the US)"),
 }
+# Lines waiting for signature (none now). Move into LINES and WORDING.md only after signing.
+PENDING = {}
 SLOT = re.compile(r"\[([^\]]+)\]")
 KEY = {"condition plain wording": "condition", "Yes/No": "yesno", "alert answer": "yesno",
        "job text": "job_text", "n": "n", "k": "k", "a": "a", "b": "b", "date": "date",
        "owner": "owner", "time": "time",
        "question or job plain wording": "plain", "id": "id", "field": "field", "item": "item", "disciplines": "disciplines", "discipline": "discipline",
-       "relationship": "relationship"}
+       "relationship": "relationship", "items": "items"}
 
 
 def msg(line_id, **f):
     def fill(m):
         v = f[KEY[m.group(1)]]
         return ("Yes" if v else "No") if isinstance(v, bool) else str(v)
-    return SLOT.sub(fill, LINES[line_id])
+    return SLOT.sub(fill, LINES[line_id] if line_id in LINES else PENDING[line_id])
 
 
 def code(name):

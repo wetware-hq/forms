@@ -14,18 +14,29 @@ Q_OPT = {"ask_if", "two_item_ok", "disciplines"}
 
 # ---- permission table: role -> actions it may take. Refusal line when an action is not allowed. ----
 PERMS = {
-    "patient": {"answer", "decline", "confirm", "grant", "revoke", "next"},
-    "patient_agent": {"answer", "next"},
-    "clinician": {"answer", "confirm", "approve", "next"},
-    "clinician_agent": {"answer", "next"},
+    "patient": {"answer", "decline", "confirm", "grant", "revoke", "submit", "next"},
+    "patient_agent": {"answer", "submit", "next"},
+    "clinician": {"answer", "confirm", "approve", "submit", "review", "next"},
+    "clinician_agent": {"answer", "submit", "next"},
 }
+# ---- per-call permissions: env methods a session may call through call(). reset, replay, check and export
+# belong to the harness and are refused with RF-HARNESS-ONLY. ----
+CALL_PERMS = {
+    "patient": {"observe", "step"},
+    "patient_agent": {"observe", "step"},
+    "clinician": {"observe", "step"},
+    "clinician_agent": {"observe", "step"},
+}
+MAX_FAILS = 3   # failed submissions in a row before the episode goes to the clinician queue
 DENY = {"patient": None, "patient_agent": "RF-ROLE-CONFIRM", "clinician": "RF-ROLE-CONFIRM",
         "clinician_agent": "RF-CLIN-AGENT"}
 CONFIRMER = {"patient": "patient", "clinician": "clinician"}   # audience -> who confirms an agent's answer
 SCOPED = {"clinician", "clinician_agent"}                        # roles checked against scope of practice
 FIELDS = {"answer": {"question_id", "value"}, "decline": {"question_id"}, "confirm": {"question_id"},
-          "grant": set(), "revoke": set(), "approve": set()}
-OPTIONAL = {"answer": {"on_behalf"}, "decline": set(), "confirm": set(), "grant": set(), "revoke": set(), "approve": set()}
+          "grant": set(), "revoke": set(), "approve": set(), "submit": set(), "review": set()}
+OPTIONAL = {"answer": {"on_behalf"}, "decline": set(), "confirm": set(), "grant": set(), "revoke": set(), "approve": set(),
+            "submit": set(), "review": set()}
+DERIVED = {"submit": {"result", "missing"}}   # filled by the env at submission, checked again on replay
 SESSION_KEYS = {"actor", "role", "discipline", "scope", "episode_id", "source"}
 
 
@@ -151,12 +162,22 @@ class FormEnv:
     # ---- derived view ----
     def _fold(self):
         st = {i: {"state": "unanswered"} for i in self.ids}
-        meta = {"approver": None, "grant": None, "revoked_on": None, "granted_on": None}
+        meta = {"approver": None, "grant": None, "revoked_on": None, "granted_on": None,
+                "submissions": 0, "fails": 0, "passed": False, "missing": []}
         for e in self.log:
             t = e["type"]
             if t == "approve":
                 if e["schema_hash"] == self.hash and e["episode_id"] == self.episode_id:
                     meta["approver"] = e["discipline"]
+                continue
+            if t == "submit":
+                meta["submissions"] += 1
+                meta["passed"] = e["result"] == "pass"
+                meta["fails"] = 0 if meta["passed"] else meta["fails"] + 1
+                meta["missing"] = e["missing"]
+                continue
+            if t == "review":
+                meta["fails"] = 0
                 continue
             if t in ("grant", "revoke"):
                 meta["grant"] = t == "grant"
@@ -214,8 +235,10 @@ class FormEnv:
             blocked.insert(0, msg("RF-NOT-APPROVED"))
         done = not open_ and meta["approver"] is not None
         given_by = {i: RELATIONSHIP[st[i]["on_behalf"]][1] for i in self.ids if st[i].get("on_behalf")}
+        queue = [msg("CQ-THREE-FAILS", items=", ".join(f"question {self.num[i]}" for i in meta["missing"]))] if meta["fails"] >= MAX_FAILS else []
         return {"complete": done, "status": msg("ST-FORM-DONE") if done else None, "open": open_,
-                "blocked": blocked, "flags": flags, "not_applicable": na, "answers": answers, "given_by": given_by}
+                "blocked": blocked, "flags": flags, "not_applicable": na, "answers": answers, "given_by": given_by,
+                "submissions": meta["submissions"], "final": meta["passed"], "clinician_queue": queue}
 
     def patient_view(self):
         """What the patient sees. Only table lines; nothing where no line exists."""
@@ -258,10 +281,37 @@ class FormEnv:
                 v |= int(st[i]["value"]) << n
         return {"answered": a, "value": v, "schema_hash": self.hash}
 
-    def observe(self):
+    def visible(self):
+        """Read scope: a patient's agent sees only a form its patient granted; a clinician's agent sees only
+        forms inside its clinician's scope (the approving discipline)."""
+        s, meta = self.session, self._fold()[1]
+        if s.role == "patient_agent":
+            return self.schema["audience"] == "patient" and meta["grant"] is True
+        if s.role == "clinician_agent":
+            return in_scope(s, [meta["approver"]] if meta["approver"] else [])
+        return True
+
+    def observe(self, item=None):
+        """Refused reads get RF-NOT-YOURS, the same line whether or not the item exists."""
+        if not self.visible() or (item is not None and item not in self.q):
+            return {"accepted": False, "reason": msg("RF-NOT-YOURS")}
         c = self.check()
+        if item is not None:
+            return {"accepted": True, "id": item, "text": self.q[item]["text"], "answer": c["answers"][item]}
         return {"episode_id": self.episode_id, "form_id": self.schema["form_id"], "open": c["open"],
                 "flags": c["flags"], "blocked": c["blocked"]}
+
+    def call(self, method, *args, **kw):
+        """The only entry point for a session (person or agent): observe and step. Everything else is harness-only."""
+        if method not in CALL_PERMS[self.session.role]:
+            return {"accepted": False, "reason": msg("RF-HARNESS-ONLY")}
+        return getattr(self, method)(*args, **kw)
+
+    def export(self):
+        """Harness-only. Refuses any episode not marked synthetic (episode id starting SYNTH-)."""
+        if not (isinstance(self.episode_id, str) and self.episode_id.startswith("SYNTH-")):
+            raise Invalid(msg("RF-EXPORT-REAL"))
+        return dict(self.check(), bitsets=self.bitsets())
 
     # ---- gate: event + the session that made it ----
     def _gate(self, e, s):
@@ -277,13 +327,19 @@ class FormEnv:
             return code("already_approved") if meta["approver"] is not None else None
         if meta["approver"] is None:
             return msg("RF-NOT-APPROVED")
+        if meta["passed"]:
+            return code("final")
+        if s.role in AGENTS and meta["fails"] >= MAX_FAILS:
+            return msg("RF-WAIT-CLINICIAN")
+        if t == "review":
+            return None if meta["fails"] >= MAX_FAILS else code("nothing_to_review")
         if (s.role == "patient_agent" or t == "grant") and self.schema["audience"] != "patient":
             return msg("RF-AGENT-CLIN-FORM")
         if s.role == "patient_agent" and meta["grant"] is None:
             return msg("RF-NO-GRANT")
         if s.role == "patient_agent" and meta["grant"] is False:
             return msg("RF-REVOKED", date=meta["revoked_on"])
-        if t in ("grant", "revoke"):
+        if t in ("grant", "revoke", "submit"):
             return None
         i = e["question_id"]
         if i not in self.q:
@@ -307,6 +363,9 @@ class FormEnv:
                  episode_id=self.episode_id)
         if a["type"] == "approve":
             e["schema_hash"] = self.hash
+        if a["type"] == "submit":
+            c = self.check()
+            e.update(result="pass" if c["complete"] else "fail", missing=c["open"])
         if a.get("question_id") in self.q:
             e["question_version"] = self.q[a["question_id"]]["version"]
         return e
@@ -328,6 +387,10 @@ class FormEnv:
         if why is not None:
             return self._refuse(why)
         self.log.append(e)
+        if t == "submit":
+            if e["result"] == "pass":
+                return {"accepted": True, "result": msg("ST-CHECK-PASS"), "final": True}
+            return {"accepted": True, "result": msg("ST-CHECK-FAIL"), "final": False, "missing": self.check()["blocked"]}
         return {"accepted": True}
 
     def _refuse(self, why):
@@ -342,7 +405,7 @@ class FormEnv:
         for e in log:
             if not isinstance(e, dict) or e.get("type") not in FIELDS:
                 raise Invalid(code("log_event"))
-            if e["type"] not in ("approve", "grant", "revoke") and e.get("question_id") in self.q and (
+            if e["type"] not in ("approve", "grant", "revoke", "submit", "review") and e.get("question_id") in self.q and (
                     e.get("episode_id") != self.episode_id or e.get("question_version") != self.q[e["question_id"]]["version"]):
                 self.log.append(dict(e))       # kept: reverts its question to unanswered
                 continue
@@ -432,7 +495,7 @@ def main(argv):
             return 2
         c = env.check()
         if cmd == "export":
-            print(json.dumps(dict(c, bitsets=env.bitsets()), indent=1, ensure_ascii=False))
+            print(json.dumps(env.export(), indent=1, ensure_ascii=False))
             return 0
         for x in c["blocked"] + c["flags"] + ([c["status"]] if c["status"] else []):
             print(x)

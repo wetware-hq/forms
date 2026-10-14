@@ -25,10 +25,10 @@ Normative rules for agents that operate or modify forms. Wording uses RFC 2119: 
 
 ## Operating the environment
 
-1. Agents **MUST** act through `FormEnv` (`reset`, `observe`, `step`, `check`, `replay`) or the command line, never by writing the log directly.
+1. Agents **MUST** act through `FormEnv.call` with `observe` or `step` only, never by writing the log directly. `reset`, `replay`, `check` and `export` are harness-only.
 2. A session's role is fixed at `reset`: `patient`, `patient_agent`, `clinician` (with a discipline) or `clinician_agent` (with a scope). An agent **MUST NOT** act in a role it was not given, and **MUST NOT** use a patient's session for anyone else.
 3. A refusal from `step` is final for that action. The agent **MUST NOT** retry it under another role, discipline or wording.
-4. Completion **MUST** be read from `check` and the exit code, never judged by a model.
+4. Completion **MUST** come from a `submit` step (one check per submission), never judged by a model. After 3 failed submissions in a row the agent **MUST** wait for a clinician's review.
 5. Answers **MUST** be real true/false. A decline **MUST NOT** be read as "no".
 6. An answer from `patient_agent` or `clinician_agent` is not final until confirmed by the patient (patient forms) or a clinician in their own session (clinician forms).
 7. An answer given by a parent, guardian or substitute decision-maker **MUST** be recorded by a clinician with `on_behalf` from the signed list (`parent`, `guardian`, `sdm`). No free text.
@@ -40,7 +40,8 @@ Normative rules for agents that operate or modify forms. Wording uses RFC 2119: 
 - Changes to the gate or permission table **SHOULD** be followed by `python3 scripts/mutate.py forms.py _gate`, which **MUST** catch every mutant.
 - Non-negotiables (roles, scope of practice, approval, evidence, wording) **MUST** be enforced by deterministic code in the gate and checker. They **MUST NOT** depend on a model, a prompt or a reviewer's judgement.
 - The event log is append-only. Code **MUST NOT** rewrite, reorder or delete log lines. A correction is a new event. State **MUST** be rebuilt by replay, and the same log **MUST** give the same state.
-- Every string a person sees **MUST** come from `messages.py`. Its fixed wording lines **MUST NOT** be edited, added or reworded ad hoc; a change needs a signed row in `RULES.md`.
+- Every string a person sees **MUST** come from `messages.py`. Its fixed wording lines **MUST NOT** be edited, added or reworded ad hoc; `LINES` **MUST** match the signed table `WORDING.md` word for word. A line not yet signed goes in `messages.PENDING`, which rulecheck reports as pending.
+- Exports **MUST** refuse any episode not marked synthetic.
 - Standard library only. Python 3.11 or later.
 
 ## Out of scope
