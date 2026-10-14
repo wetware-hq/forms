@@ -41,7 +41,7 @@ SCOPED = {"clinician", "clinician_agent"}                        # roles checked
 FIELDS = {"answer": {"question_id", "value"}, "decline": {"question_id"}, "unknown": {"question_id"}, "confirm": {"question_id"},
           "grant": {"agent", "patient"}, "revoke": {"agent", "patient"}, "approve": set(), "submit": set(), "review": set(),
           "close_sameday": {"question_id", "status"}}
-OPTIONAL = {"answer": {"on_behalf", "interpreter"}, "decline": set(), "unknown": set(), "confirm": set(), "grant": set(), "revoke": set(), "approve": set(),
+OPTIONAL = {"answer": {"on_behalf", "interpreter", "reason"}, "decline": set(), "unknown": set(), "confirm": set(), "grant": set(), "revoke": set(), "approve": set(),
             "submit": set(), "review": set(), "close_sameday": set()}
 DERIVED = {"submit": {"result", "missing"}}   # filled by the env at submission, checked again on replay
 SESSION_KEYS = {"actor", "role", "discipline", "scope", "episode_id", "source"}
@@ -302,7 +302,8 @@ class FormEnv:
             par = self.q[i]["ask_if"]["id"]
             waiting_lines.append(msg("CQ-WAITING-PARENT", n=self.num[par], parent_text=self.q[par]["text"], m=self.num[i], text=self.q[i]["text"]))
         queue += waiting_lines
-        return {"complete": done, "status": msg("ST-FORM-DONE") if done else None, "open": open_,
+        checked = msg("ST-CHECK-PASS") if meta["passed"] else msg("ST-CHECK-FAIL") if meta["submissions"] else None
+        return {"complete": done, "status": msg("ST-FORM-DONE") if done else None, "checked": checked, "open": open_,
                 "blocked": blocked, "flags": flags, "not_applicable": na, "answers": answers, "given_by": given_by,
                 "submissions": meta["submissions"], "final": meta["passed"], "clinician_queue": queue,
                 "waiting": waiting, "waiting_lines": waiting_lines, "alerts": alerts, "sameday_closed": dict(meta["closed_sameday"])}
@@ -452,6 +453,11 @@ class FormEnv:
             return None if i in meta["sameday"] else code("nothing_to_close")
         if t == "answer" and type(e["value"]) is not bool:
             return msg("RF-NOT-BOOL")
+        if t == "answer" and st[i]["state"] == "declined":      # a patient's decline: only the patient, or a clinician
+            if s.role in AGENTS:                                  # in person who records a reason, can change it
+                return msg(DENY[s.role])
+            if s.role == "clinician" and not (isinstance(e.get("reason"), str) and e["reason"].strip()):
+                return code("decline_override_needs_reason")
         if "interpreter" in e and s.role != "clinician":
             return code("interpreter_clinician_only")
         if "interpreter" in e and type(e["interpreter"]) is not bool:
@@ -496,7 +502,10 @@ class FormEnv:
         why = self._gate(e, s)
         if why is not None:
             return self._refuse(why)
+        reviewed = self.check()["clinician_queue"] if t == "review" else None   # what the clinician reviewed
         self.log.append(e)
+        if reviewed is not None:
+            return {"accepted": True, "reviewed": reviewed}
         if t == "submit":
             if e["result"] == "pass":
                 return {"accepted": True, "result": msg("ST-CHECK-PASS"), "final": True}

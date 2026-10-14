@@ -1307,3 +1307,65 @@ def test_t2_agent_on_unapproved_clinician_form_gets_audience_line():
         assert e.step(a) == {"accepted": False, "reason": msg("RF-AGENT-CLIN-FORM")} and e.log == []
     p = env(PH, "patient_agent", approve=None)
     assert p.step(ans(p.ids[0], True))["reason"] == msg("RF-NOT-APPROVED")
+
+
+# ---------- S15 severity 5: an agent never overwrites a patient's decline ----------
+def _declined():
+    e = env(); assert e.step(act("decline", "smokes"))["accepted"]
+    return e
+
+
+def _signed_by_id(lid):
+    import os, re
+    sib = pathlib.Path(os.environ.get("STACK_SIBLINGS_DIR") or ROOT.parent)
+    raw = (sib / "wording" / "forms_orders_lines_SIGNED.md").read_bytes().decode("utf-8")
+    return re.search(rf"^\| {re.escape(lid)} \|(?:.*\|)? (.*) \|$", raw, re.M).group(1)
+
+
+def test_agent_answer_never_overwrites_a_decline():
+    """Refused outright: not kept as a draft, never replaces the decline, never reaches the check or patient view."""
+    for role, line in (("clinician_agent", "RF-CLIN-AGENT"), ("patient_agent", "RF-ROLE-CONFIRM")):
+        e = _declined()
+        if role == "patient_agent":
+            p = as_role(e, "patient"); assert p.step(grant_ev())["accepted"]; e = p
+        a = as_role(e, role, scope=("medicine",) if role == "clinician_agent" else ())
+        before = (copy.deepcopy(a.log), a.check()["answers"]["smokes"], a.patient_view()["smokes"])
+        r = a.step(ans("smokes", False))
+        assert r["accepted"] is False and r["reason"] == msg(line) == _signed_by_id(line), (role, r)
+        assert not [x for x in a.log if x.get("type") == "answer" and x.get("question_id") == "smokes"]   # no draft
+        assert "smokes" not in a.check()["open"]
+        assert (a.log, a.check()["answers"]["smokes"], a.patient_view()["smokes"]) == before
+        assert a.check()["answers"]["smokes"] == "declined"
+
+
+def test_decline_changed_only_by_patient_or_clinician_with_reason():
+    c = as_role(_declined(), "clinician", discipline="medicine")
+    n = len(c.log)
+    r = c.step(ans("smokes", False))
+    assert r["accepted"] is False and len(c.log) == n and c.check()["answers"]["smokes"] == "declined"
+    assert c.step(dict(ans("smokes", False), reason="asked in person at clinic"))["accepted"]
+    assert c.log[-1]["reason"] == "asked in person at clinic" and c.check()["answers"]["smokes"] != "declined"
+    p = as_role(_declined(), "patient")
+    assert p.step(ans("smokes", False))["accepted"] and p.check()["answers"]["smokes"] != "declined"
+
+
+def test_check_status_is_the_full_submission_status():
+    """The checker reports the full submission status: ST-CHECK-PASS after a pass (ST-CHECK-FAIL after a fail), next to
+    the form status ST-FORM-DONE; before any submission there is no checked status."""
+    c = env(PP, "clinician", discipline="medicine")
+    while (q := c.step({"type": "next"})["next"]):
+        assert c.step(ans(q, c.q[q]["alert_answer"] is False))["accepted"]
+    assert c.check()["status"] == msg("ST-FORM-DONE") and c.check()["checked"] is None
+    assert c.step(act("submit"))["result"] == msg("ST-CHECK-PASS")
+    assert c.check()["checked"] == msg("ST-CHECK-PASS") == _signed_by_id("ST-CHECK-PASS")
+    assert c.check()["status"] == msg("ST-FORM-DONE")
+    f = env(PP, "clinician", discipline="medicine")
+    assert f.step(act("submit"))["result"] == msg("ST-CHECK-FAIL") and f.check()["checked"] == _signed_by_id("ST-CHECK-FAIL")
+
+
+def test_review_returns_the_queue_line_it_reviewed():
+    e = env(role="patient_agent", grant=True); fail_n(e, 3)
+    c = as_role(e, "clinician", "medicine")
+    want = c.check()["clinician_queue"]
+    assert want and want[0].startswith(_signed_by_id("CQ-THREE-FAILS").split("[")[0])
+    assert c.step(act("review")) == {"accepted": True, "reviewed": want}
