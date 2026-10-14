@@ -447,3 +447,61 @@ def test_confirm_needs_unconfirmed_agent_answer():
     a = env(role="patient_agent", grant=True); a.step(ans("smokes", True))
     q = as_role(a, "patient"); assert q.step(act("confirm", "smokes"))["accepted"]
     assert q.step(act("confirm", "smokes"))["accepted"] is False
+
+# ---------- round 6 ----------
+def test_two_item_ok_set_only_by_clinician():
+    d = copy.deepcopy(SPH); d["question"][3]["text"] = "Do you smoke or vape?"
+    with pytest.raises(Invalid):
+        F.check_schema(d)
+    for role, kw in (("clinician_agent", {"scope": ("medicine",)}), ("patient_agent", {}), ("patient", {})):
+        with pytest.raises(Invalid):
+            F.set_two_item_ok(d, "smokes", open_session("SYNTH-x", role, **kw))
+    with pytest.raises(Invalid, match="assistant can draft"):
+        F.set_two_item_ok(d, "smokes", open_session("SYNTH-x", "clinician_agent", scope=("medicine",)))
+    ok = F.set_two_item_ok(d, "smokes", open_session("SYNTH-dr", "clinician", "medicine"))
+    assert ok["question"][3]["two_item_ok"] is True and F.clinician_queue(ok) == [msg("CQ-TWO-ITEMS", n=4)]
+    with pytest.raises(Invalid) as e:
+        F.propose_form(ok)                                     # a proposal may not carry the flag
+    assert str(e.value) == msg("CK-TWO-ITEMS", n=4)
+    with pytest.raises(Invalid):
+        F.set_two_item_ok(d, "ghost", open_session("SYNTH-dr", "clinician", "medicine"))
+
+def sdm(rel="sdm", role="clinician", **kw):
+    e = env(role=role, discipline="nursing" if role == "clinician" else None, **kw)
+    return e, e.step(dict(ans("smokes", True), on_behalf=rel))
+
+def test_line_pv_ans_clin():
+    e = env(role="clinician", discipline="nursing"); e.step(ans("smokes", True))
+    assert as_role(e, "patient").patient_view()["smokes"] == "Your care team answered: nursing, on 1936-05-02."
+
+def test_line_pv_ans_sdm():
+    for rel, words in (("parent", "Your parent"), ("guardian", "Your guardian"),
+                       ("sdm", "The person legally allowed to decide for you")):
+        e, r = sdm(rel)
+        assert r["accepted"] and e.patient_view()["smokes"] == f"{words} answered, recorded by your care team on 1936-05-02."
+
+def test_relationship_signed_list_clinician_only():
+    from messages import RELATIONSHIP
+    assert set(RELATIONSHIP) == {"parent", "guardian", "sdm"}
+    for bad in ("carer", "Aunt SYNTH-Mary", ""):
+        assert sdm(bad)[1]["accepted"] is False
+    assert sdm("parent", role="patient")[1] == {"accepted": False, "reason": ""}
+    assert sdm("parent", role="patient_agent", grant=True)[1]["accepted"] is False
+    e, r = sdm("guardian")
+    assert e.log[-1]["on_behalf"] == "guardian" and e.log[-1]["role"] == "clinician"
+    assert e.check()["given_by"] == {"smokes": "Guardian"}
+    f = env(approve=None); assert f.replay(e.log) == e.check()
+
+def test_cli_on_behalf(tmp_path):
+    log = str(tmp_path / "l.jsonl")
+    cli("approve", PH, log)
+    assert cli("answer", PH, log, "smokes=true", "--on_behalf", "carer") == 2
+    assert cli("answer", PH, log, "smokes=true", "--on_behalf", "sdm") == 1
+
+def test_flags_only_where_due():
+    f = env().check()["flags"]
+    assert msg("FL-UNKNOWN", n=4) not in f and msg("FL-UNKNOWN", n=1) in f        # smokes is not safety-critical
+    e = env(); e.step(ans("allergy_any", False))
+    assert not any("question 1" in x for x in e.check()["flags"])               # answered, not the alert answer
+    assert msg("RF-NOT-APPROVED") in env(approve=None).check()["blocked"]
+    assert msg("RF-NOT-APPROVED") not in env().check()["blocked"]

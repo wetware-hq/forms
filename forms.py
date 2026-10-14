@@ -3,7 +3,7 @@
 Schema: TOML. Store: append-only event log (JSONL). Everything else is derived by replaying the log.
 Agents never infer: every answer is an explicit event. All user-facing text comes from messages.py."""
 import datetime, hashlib, json, re, sys, tomllib
-from messages import msg, code
+from messages import msg, code, RELATIONSHIP
 from access import Invalid, AGENTS, open_session, in_scope
 
 ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -25,6 +25,7 @@ CONFIRMER = {"patient": "patient", "clinician": "clinician"}   # audience -> who
 SCOPED = {"clinician", "clinician_agent"}                        # roles checked against scope of practice
 FIELDS = {"answer": {"question_id", "value"}, "decline": {"question_id"}, "confirm": {"question_id"},
           "grant": set(), "revoke": set(), "approve": set()}
+OPTIONAL = {"answer": {"on_behalf"}, "decline": set(), "confirm": set(), "grant": set(), "revoke": set(), "approve": set()}
 SESSION_KEYS = {"actor", "role", "discipline", "scope", "episode_id", "source"}
 
 
@@ -92,9 +93,25 @@ def clinician_queue(d):
 
 
 def propose_form(d):
-    """A proposed form must pass the fixed checker; it takes effect only after a clinician approves it."""
+    """A proposed form must pass the fixed checker; it takes effect only after a clinician approves it.
+    A proposal may not set two_item_ok: only a clinician in their own session can (set_two_item_ok)."""
     check_schema(d)
+    for n, q in enumerate(d["question"], 1):
+        if q.get("two_item_ok"):
+            raise Invalid(msg("CK-TWO-ITEMS", n=n))
     return {"schema_hash": schema_hash(d), "approved": False, "queue": clinician_queue(d)}
+
+
+def set_two_item_ok(d, qid, session):
+    """Only a clinician in their own session can flag a question two_item_ok. Returns a new schema."""
+    if session.role != "clinician":
+        raise Invalid(msg("RF-CLIN-AGENT") if session.role == "clinician_agent" else code("two_item_ok_clinician_only"))
+    new = json.loads(json.dumps(d))
+    hit = [q for q in new["question"] if q["id"] == qid]
+    if not hit:
+        raise Invalid(code("question_id"))
+    hit[0]["two_item_ok"] = True
+    return check_schema(new)
 
 
 def diff_view(old, new):
@@ -150,7 +167,8 @@ class FormEnv:
                 st[i] = {"state": "unanswered", "stale": True}
             elif t == "answer":
                 st[i] = {"state": "answered", "value": e["value"], "source": e["role"],
-                         "confirmed": e["role"] not in AGENTS, "confirmed_by": None}
+                         "confirmed": e["role"] not in AGENTS, "confirmed_by": None,
+                         "discipline": e["discipline"], "date": e["timestamp"][:10], "on_behalf": e.get("on_behalf")}
             elif t == "decline":
                 st[i] = {"state": "declined"}
             elif t == "confirm":
@@ -194,8 +212,9 @@ class FormEnv:
         if meta["approver"] is None:
             blocked.insert(0, msg("RF-NOT-APPROVED"))
         done = not open_ and meta["approver"] is not None
+        given_by = {i: RELATIONSHIP[st[i]["on_behalf"]][1] for i in self.ids if st[i].get("on_behalf")}
         return {"complete": done, "status": msg("ST-FORM-DONE") if done else None, "open": open_,
-                "blocked": blocked, "flags": flags, "not_applicable": na, "answers": answers}
+                "blocked": blocked, "flags": flags, "not_applicable": na, "answers": answers, "given_by": given_by}
 
     def patient_view(self):
         """What the patient sees. Only table lines; nothing where no line exists."""
@@ -219,6 +238,10 @@ class FormEnv:
                 out[i] = msg("PV-ANS-SELF")
             elif s["source"] == "patient_agent":
                 out[i] = msg("PV-ANS-AGENT")
+            elif s["on_behalf"]:
+                out[i] = msg("PV-ANS-SDM", relationship=RELATIONSHIP[s["on_behalf"]][0], date=s["date"])
+            elif s["source"] == "clinician":
+                out[i] = msg("PV-ANS-CLIN", discipline=s["discipline"], date=s["date"])
             else:
                 out[i] = ""
         nxt = [i for i in self.check()["open"] if st[i]["state"] == "unanswered"]
@@ -266,6 +289,10 @@ class FormEnv:
             return code("question_id")
         if t == "answer" and type(e["value"]) is not bool:
             return msg("RF-NOT-BOOL")
+        if "on_behalf" in e and s.role != "clinician":
+            return code("on_behalf_clinician_only")
+        if "on_behalf" in e and e["on_behalf"] not in RELATIONSHIP:
+            return code("on_behalf_not_on_signed_list")
         if t == "confirm" and CONFIRMER[self.schema["audience"]] != s.role:
             return msg("RF-ROLE-CONFIRM") if self.schema["audience"] == "patient" else ""
         if t == "confirm" and not (st[i]["state"] == "answered" and not st[i]["confirmed"]):
@@ -293,7 +320,7 @@ class FormEnv:
         if t == "next":
             o = self.check()["open"]
             return {"accepted": True, "next": o[0] if o else None}
-        if set(action) != FIELDS[t] | {"type", "timestamp"}:
+        if not FIELDS[t] | {"type", "timestamp"} <= set(action) <= FIELDS[t] | {"type", "timestamp"} | OPTIONAL[t]:
             return self._refuse(code("fields"))
         e = self._event(action, s)
         why = self._gate(e, s)
@@ -322,7 +349,7 @@ class FormEnv:
                 self.log.append(dict(e))       # approval of another version: kept, covers nothing here
                 continue
             s = open_session(e.get("actor"), e.get("role"), e.get("discipline"), e.get("scope"))
-            if self._event({k: e[k] for k in FIELDS[e["type"]] | {"type", "timestamp"} if k in e}, s) != e:
+            if self._event({k: e[k] for k in FIELDS[e["type"]] | OPTIONAL[e["type"]] | {"type", "timestamp"} if k in e}, s) != e:
                 raise Invalid(code("log_event"))
             why = self._gate(e, s)
             if why is not None:
@@ -389,6 +416,8 @@ def main(argv):
                 if cmd == "answer":
                     qid, eq, val = item.partition("=")
                     a.update(question_id=qid, value=cli_bool(val) if eq else None)
+                    if "on_behalf" in o:
+                        a["on_behalf"] = o["on_behalf"]
                 elif FIELDS[cmd]:
                     a["question_id"] = item
                 r = env.step(a)

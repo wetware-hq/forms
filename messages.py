@@ -20,7 +20,6 @@ LINES = {
     "RF-NOT-BOOL": "Refused: answers must be Yes or No.",
     "RF-PERSON-JOB": "Refused: a person must do this job and tick it in their own session.",
     "RF-EVIDENCE": "Refused: a tick needs a record id, such as a result or a sent document.",
-    "RF-WAITING": "Refused: this job waits on [job text], which is not done yet.",
     "RF-CANCEL-REASON": "Refused: cancelling needs a reason.",
     "RF-NOT-APPROVED": "Refused: this form or list is not approved by a clinician yet.",
     "CK-TWO-FACTS": "Question [n] asks more than one thing. Split it.",
@@ -53,12 +52,23 @@ LINES = {
     "RF-SCOPE": "Refused: this item can only be confirmed, cancelled or ticked by [disciplines].",
     "RF-UNREGISTERED": "Refused: only registered health professionals and patients can use this in version 1.",
     "RF-CLIN-AGENT": "Refused: a clinician's assistant can draft and propose, but cannot confirm, cancel or approve.",
+    "WT-WAITING": "Waiting: this job can start once [job text] is done.",
+    "PV-ANS-CLIN": "Your care team answered: [discipline], on [date].",
+    "PV-ANS-SDM": "[relationship] answered, recorded by your care team on [date].",
+}
+# Signed list of legal decision-making roles: key -> (patient wording, clinician wording). No free text.
+RELATIONSHIP = {
+    "parent": ("Your parent", "Parent"),
+    "guardian": ("Your guardian", "Guardian"),
+    "sdm": ("The person legally allowed to decide for you",
+            "Substitute decision-maker (the local legal term, such as healthcare proxy in the US)"),
 }
 SLOT = re.compile(r"\[([^\]]+)\]")
 KEY = {"condition plain wording": "condition", "Yes/No": "yesno", "alert answer": "yesno",
        "job text": "job_text", "n": "n", "k": "k", "a": "a", "b": "b", "date": "date",
        "owner": "owner", "time": "time",
-       "question or job plain wording": "plain", "id": "id", "field": "field", "item": "item", "disciplines": "disciplines"}
+       "question or job plain wording": "plain", "id": "id", "field": "field", "item": "item", "disciplines": "disciplines", "discipline": "discipline",
+       "relationship": "relationship"}
 
 
 def msg(line_id, **f):
