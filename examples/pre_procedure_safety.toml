@@ -1,0 +1,27 @@
+# Synthetic example. A doctor's agent fills this in before a procedure.
+form_id = "pre-procedure-safety"
+version = "1"
+
+[[question]]
+id = "identity_confirmed"
+text = "Has the patient's identity been confirmed with two identifiers?"
+
+[[question]]
+id = "consent_signed"
+text = "Is signed consent on file?"
+
+[[question]]
+id = "site_marked"
+text = "Is the procedure site marked?"
+
+[[question]]
+id = "allergies_checked"
+text = "Have allergies been checked?"
+
+[[question]]
+id = "fasting_confirmed"
+text = "Has fasting been confirmed?"
+
+[[question]]
+id = "anticoagulant_reviewed"
+text = "Has blood-thinner use been reviewed?"

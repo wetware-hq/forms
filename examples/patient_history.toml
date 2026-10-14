@@ -1,0 +1,27 @@
+# Synthetic example. A patient's agent fills this in before a clinic visit.
+form_id = "patient-history"
+version = "1"
+
+[[question]]
+id = "allergy_any"
+text = "Do you have any allergies to medicines?"
+
+[[question]]
+id = "takes_blood_thinner"
+text = "Do you take a blood thinner?"
+
+[[question]]
+id = "diabetes"
+text = "Have you ever been told you have diabetes?"
+
+[[question]]
+id = "smokes"
+text = "Do you smoke now?"
+
+[[question]]
+id = "pregnant_possible"
+text = "Could you be pregnant?"
+
+[[question]]
+id = "prior_surgery"
+text = "Have you had an operation before?"
