@@ -1,0 +1,38 @@
+# Synthetic allied-health example: a physiotherapy falls-risk screen for an invented patient.
+form_id = "physio-falls-risk"
+version = "1"
+audience = "clinician"
+
+[[question]]
+id = "fell_last_year"
+version = "1"
+text = "Has the person fallen in the last 12 months?"
+alert_answer = true
+safety_critical = true
+clinician_must_confirm = true
+disciplines = ["physiotherapy", "nursing"]
+
+[[question]]
+id = "stands_unaided"
+version = "1"
+text = "Can the person stand up from a chair unaided?"
+alert_answer = false
+safety_critical = true
+clinician_must_confirm = false
+disciplines = ["physiotherapy"]
+
+[[question]]
+id = "uses_walking_aid"
+version = "1"
+text = "Does the person use a walking aid?"
+alert_answer = true
+safety_critical = false
+clinician_must_confirm = false
+
+[[question]]
+id = "tug_slow"
+version = "1"
+text = "Did the timed walking test take longer than 12 seconds?"
+alert_answer = true
+safety_critical = true
+clinician_must_confirm = false
