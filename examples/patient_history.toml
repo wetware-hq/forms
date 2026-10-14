@@ -1,27 +1,45 @@
-# Synthetic example. A patient's agent fills this in before a clinic visit.
+# Synthetic example. A patient (or their agent) fills this in before a clinic visit.
 form_id = "patient-history"
-version = "1"
+version = "2"
+audience = "patient"
 
 [[question]]
 id = "allergy_any"
+version = "1"
 text = "Do you have any allergies to medicines?"
+alert_answer = true
+safety_critical = true
+clinician_must_confirm = false
+
+[[question]]
+id = "allergy_reaction_severe"
+version = "1"
+text = "Did a medicine allergy ever make it hard to breathe?"
+alert_answer = true
+safety_critical = true
+clinician_must_confirm = false
+ask_if = { id = "allergy_any", equals = true, wording = "you said you have no medicine allergies" }
 
 [[question]]
 id = "takes_blood_thinner"
+version = "1"
 text = "Do you take a blood thinner?"
-
-[[question]]
-id = "diabetes"
-text = "Have you ever been told you have diabetes?"
+alert_answer = true
+safety_critical = false
+clinician_must_confirm = false
 
 [[question]]
 id = "smokes"
+version = "1"
 text = "Do you smoke now?"
+alert_answer = true
+safety_critical = false
+clinician_must_confirm = false
 
 [[question]]
 id = "pregnant_possible"
+version = "1"
 text = "Could you be pregnant?"
-
-[[question]]
-id = "prior_surgery"
-text = "Have you had an operation before?"
+alert_answer = true
+safety_critical = false
+clinician_must_confirm = false

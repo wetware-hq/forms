@@ -1,27 +1,52 @@
-# Synthetic example. A doctor's agent fills this in before a procedure.
+# Synthetic example. A doctor's agent and the clinician fill this in before a procedure.
 form_id = "pre-procedure-safety"
-version = "1"
+version = "2"
+audience = "clinician"
 
 [[question]]
 id = "identity_confirmed"
+version = "1"
 text = "Has the patient's identity been confirmed with two identifiers?"
+alert_answer = false
+safety_critical = true
+clinician_must_confirm = true
 
 [[question]]
 id = "consent_signed"
+version = "1"
 text = "Is signed consent on file?"
+alert_answer = false
+safety_critical = true
+clinician_must_confirm = true
 
 [[question]]
 id = "site_marked"
+version = "1"
 text = "Is the procedure site marked?"
+alert_answer = false
+safety_critical = true
+clinician_must_confirm = false
 
 [[question]]
 id = "allergies_checked"
+version = "1"
 text = "Have allergies been checked?"
+alert_answer = false
+safety_critical = true
+clinician_must_confirm = false
 
 [[question]]
 id = "fasting_confirmed"
+version = "1"
 text = "Has fasting been confirmed?"
+alert_answer = false
+safety_critical = false
+clinician_must_confirm = false
 
 [[question]]
-id = "anticoagulant_reviewed"
-text = "Has blood-thinner use been reviewed?"
+id = "anticoagulant_present"
+version = "1"
+text = "Is the patient on a blood thinner?"
+alert_answer = true
+safety_critical = true
+clinician_must_confirm = true
