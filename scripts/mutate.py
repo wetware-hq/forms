@@ -4,7 +4,7 @@ For each mutant: flip a comparison, swap and/or, drop a 'not', flip a True/False
 remove one action from the permission table, map a PATIENT_LINE code to a wrong signed line, or make a
 refusal touch the session, log or role. Then run pytest on a copy. A mutant is killed when pytest fails.
 Usage: scripts/mutate.py   Exit 0 only if every mutant is killed."""
-import ast, copy, pathlib, shutil, subprocess, sys, tempfile, tomllib
+import os, ast, copy, pathlib, shutil, subprocess, sys, tempfile, tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FLIP = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.In: ast.NotIn, ast.NotIn: ast.In, ast.Is: ast.IsNot,
@@ -93,11 +93,17 @@ def main(argv):
     with tempfile.TemporaryDirectory() as td:
         work = pathlib.Path(td) / "w"
         shutil.copytree(ROOT, work, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        env = dict(os.environ, STACK_SIBLINGS_DIR=os.environ.get("STACK_SIBLINGS_DIR") or str(ROOT.parent))
+        if subprocess.run([sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider"], cwd=work,
+                          capture_output=True, env=env).returncode:
+            print("baseline: the unmutated copy fails its tests; refusing to count mutants")
+            return 1
         for i in range(total):
             label, code = mutate(src, funcs, i)
             (work / mod).write_text(code)
             r = subprocess.run([sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider"],
-                               cwd=work, capture_output=True)
+                               cwd=work, capture_output=True,
+                               env=dict(os.environ, STACK_SIBLINGS_DIR=os.environ.get("STACK_SIBLINGS_DIR") or str(ROOT.parent)))
             if r.returncode == 0:
                 survivors.append(label)
         (work / mod).write_text(src)
@@ -105,6 +111,9 @@ def main(argv):
     for s in survivors:
         print(f"SURVIVED {mod} {s}")
     print(f"mutation {mod}: {killed}/{total} killed")
+    if not survivors:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        __import__("safety_stamp").record(ROOT)
     return 0 if not survivors else 1
 
 
