@@ -6,10 +6,15 @@ ROOT = HERE if (HERE / "WORDING.md").is_file() else HERE.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import sync_wording
 
+# Committed row count of forms_orders_lines_SIGNED.md (room ruling 09:51). Changed in the same commit as the signed
+# file changes: the test compares the count read off the file with this number.
+SIGNED_ROW_COUNT = 123
+
 
 def test_every_wording_line_matches_signed_source():
     sib = pathlib.Path(os.environ.get("STACK_SIBLINGS_DIR") or ROOT.parent)
     signed = dict(sync_wording.signed_rows((sib / "wording" / "forms_orders_lines_SIGNED.md").read_text()))
     body = (ROOT / "WORDING.md").read_text().split("## Pending signature")[0]
     have = dict(sync_wording.ROW.findall(body))
+    assert len(signed) == SIGNED_ROW_COUNT, f"signed file has {len(signed)} rows, committed count is {SIGNED_ROW_COUNT}"
     assert have and have == signed
