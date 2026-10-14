@@ -202,7 +202,7 @@ def test_scripted_agent_episode():
 # ---------- rulings round 4 (Physician) ----------
 def test_audience_decides_confirmer():
     a = env(PP, "clinician_agent", scope=("medicine",)); a.step(ans("site_marked", True))
-    assert as_role(a, "patient").step(act("confirm", "site_marked"))["reason"] == msg("RF-ROLE-CONFIRM")   # S06b: never an empty reason
+    assert as_role(a, "patient").step(act("confirm", "site_marked"))["reason"] == msg("PV-ROLE-CONFIRM")   # patient screen line (round 11)
     b = env(role="patient_agent", grant=True); b.step(ans("smokes", True))
     assert as_role(b, "clinician", "medicine").step(act("confirm", "smokes"))["reason"] == msg("RF-ROLE-CONFIRM")
     c = as_role(a, "clinician", "medicine")
@@ -328,7 +328,7 @@ def test_p09_roles_fixed_at_session_open():
     e = env()
     for k in ("role", "source", "actor", "discipline", "episode_id"):
         r = e.step(dict(ans("smokes", True), **{k: "clinician"}))
-        assert r["accepted"] is False and r["reason"] == F.code("role_fixed_at_session_open")
+        assert r["accepted"] is False and r["reason"] == msg("PV-CARE-TEAM-STEP")
 
 # ---------- wording lines ----------
 def test_line_pv_ans_self():
@@ -450,9 +450,9 @@ def test_line_pv_revoke():
 
 def test_confirm_needs_unconfirmed_agent_answer():
     p = env()
-    assert p.step(act("confirm", "smokes"))["reason"] == F.code("nothing_to_confirm")
+    assert p.step(act("confirm", "smokes"))["reason"] == msg("PV-NOTHING-TO-CONFIRM")
     p.step(ans("smokes", True))
-    assert p.step(act("confirm", "smokes"))["reason"] == F.code("nothing_to_confirm")
+    assert p.step(act("confirm", "smokes"))["reason"] == msg("PV-NOTHING-TO-CONFIRM")
     a = env(role="patient_agent", grant=True); a.step(ans("smokes", True))
     q = as_role(a, "patient"); assert q.step(act("confirm", "smokes"))["accepted"]
     assert q.step(act("confirm", "smokes"))["accepted"] is False
@@ -494,7 +494,7 @@ def test_relationship_signed_list_clinician_only():
     assert set(RELATIONSHIP) == {"parent", "guardian", "sdm"}
     for bad in ("carer", "Aunt SYNTH-Mary", ""):
         assert sdm(bad)[1]["accepted"] is False
-    assert sdm("parent", role="patient")[1] == {"accepted": False, "reason": F.code("on_behalf_clinician_only")}
+    assert sdm("parent", role="patient")[1] == {"accepted": False, "reason": msg("PV-CARE-TEAM-STEP")}
     assert sdm("parent", role="patient_agent", grant=True)[1]["accepted"] is False
     e, r = sdm("guardian")
     assert e.log[-1]["on_behalf"] == "guardian" and e.log[-1]["role"] == "clinician"
@@ -822,7 +822,7 @@ def test_r8_06_follow_up_not_needed_only_when_parent_no():
 
 def test_r8_07_grant_names_agent_and_patient():
     p = env()
-    assert p.step(grant_ev(agent=""))["reason"] == F.code("grant_names_agent")
+    assert p.step(grant_ev(agent=""))["reason"] == msg("PV-GRANT-NAMES-AGENT")
     assert p.step(grant_ev(patient="SYNTH-pt-99"))["accepted"] is False
     assert p.step(grant_ev())["accepted"] and p.log[-1]["agent"] == AGENT and p.log[-1]["patient"] == "SYNTH-pt-01"
     assert p.step(grant_ev(agent="SYNTH-agent-02", patient="SYNTH-pt-01"))["accepted"]
@@ -1098,7 +1098,7 @@ def test_t3_bad_on_behalf_is_bad_field_and_no_empty_refusals():
     r = c.step(dict(ans("smokes", False), on_behalf="cousin"))
     assert r["reason"] == msg("ER-BAD-FIELD", field="on_behalf", item="answer")
     f = env(FR, role="patient")
-    assert f.step(act("confirm", f.ids[0]))["reason"] == msg("RF-ROLE-CONFIRM")
+    assert f.step(act("confirm", f.ids[0]))["reason"] == msg("PV-ROLE-CONFIRM")
 
 def test_t3_no_refusal_is_ever_empty():
     for case in (PH, FR, PP):
@@ -1133,3 +1133,134 @@ def test_cli_commands_need_exact_positions(tmp_path):
     assert F.main(["f", "answer", PH, log, EP, "smokes=true", "--actor", "SYNTH-pt-01", "--ts", TS]) == 2
     assert F.main(["f", "nosuch", PH, log, EP, "--role", "patient", "--actor", "SYNTH-pt-01", "--ts", TS]) == 2
     assert F.main(["f", "answer", PH, log, "--role", "patient", "--actor", "SYNTH-pt-01", "--ts", TS]) == 2
+
+
+# ---- round 11: no machine code ever reaches a patient screen ----
+def _patient_refusals():
+    out = []
+    for case in (PH, FR, PP):
+        e = env(case, role="patient")
+        for t in sorted(F.FIELDS) + ["next"]:
+            for i in [e.ids[0], "no_such_q"]:
+                a = ans(i, True) if t == "answer" else act(t, i if "question_id" in F.FIELDS.get(t, ()) else None)
+                if t == "close_sameday":
+                    a["status"] = SD["confirmed"]
+                if t in ("grant", "revoke"):
+                    a = grant_ev(t)
+                r = as_role(e, "patient").step(a)
+                if not r["accepted"]:
+                    out.append((case, t, r["reason"]))
+        r = as_role(e, "patient").step(grant_ev(agent=""))
+        out.append((case, "grant-no-agent", r["reason"]))
+        for how, bad in (("bad type", {"type": "zzz", "timestamp": TS}), ("extra field", dict(ans(e.ids[0], True), zzz=1)),
+                         ("bad timestamp", dict(ans(e.ids[0], True), timestamp="x")), ("role key", dict(act("submit"), role="clinician")),
+                         ("interpreter", dict(ans(e.ids[0], True), interpreter=True)), ("on_behalf", dict(ans(e.ids[0], True), on_behalf="parent"))):
+            out.append((case, how, as_role(e, "patient").step(bad)["reason"]))
+    return out
+
+KNOWN_RED = set()
+
+def test_r11_no_err_on_patient_screens():
+    bad = [x for x in _patient_refusals() if x[2].startswith("ERR:") and x[2] not in KNOWN_RED]
+    assert bad == []
+
+def test_r11_grant_names_agent_has_patient_line():
+    assert env(role="patient").step(grant_ev(agent=""))["reason"] == msg("PV-GRANT-NAMES-AGENT")
+
+
+def test_r11_patient_lines_for_confirm_refusals():
+    p = env(role="patient")
+    assert p.step(act("confirm", "smokes"))["reason"] == msg("PV-NOTHING-TO-CONFIRM")
+    f = env(PP, role="patient")
+    assert f.step(act("confirm", f.ids[0]))["reason"] == msg("PV-ROLE-CONFIRM")
+    c = env(role="clinician", discipline="medicine")
+    assert c.step(act("confirm", "smokes"))["reason"] == msg("RF-ROLE-CONFIRM")   # clinicians keep the RF line
+
+
+OTHER_ID = "SYNTH-pt-77"
+
+def test_r11_other_patient_never_shown():
+    p = env(role="patient")
+    for a in (grant_ev(patient=OTHER_ID), grant_ev("revoke", patient=OTHER_ID), grant_ev(agent=OTHER_ID, patient=OTHER_ID)):
+        assert p.step(a) == {"accepted": False, "reason": msg("PV-ONLY-YOU")}
+    import json as _j
+    seen = _j.dumps([p.observe(), p.patient_view(), p.check(), p.log])
+    assert OTHER_ID not in seen
+
+def test_r11_patient_lines_for_each_code():
+    p = env(role="patient")
+    assert p.step(grant_ev("revoke"))["reason"] == msg("PV-NOTHING-TO-REVOKE")
+    assert p.step(ans("no_such_q", True))["reason"] == msg("PV-QUESTION-NOT-FOUND")
+    for t in ("approve", "review"):
+        assert p.step(act(t))["reason"] == msg("PV-CARE-TEAM-STEP")
+    assert p.step(dict(act("close_sameday", "smokes"), status=SD["confirmed"]))["reason"] == msg("PV-CARE-TEAM-STEP")
+    c = env(role="clinician", discipline="medicine")
+    assert c.step(ans("no_such_q", True))["reason"] == F.code("question_id")
+
+
+def test_r11_role_key_refusal_changes_nothing():
+    p = env(role="patient"); p.step(ans("smokes", False))
+    before = (copy.deepcopy(p.log), p.session, p.check(), p.patient_view())
+    for k, v in (("role", "clinician"), ("actor", "SYNTH-dr-01"), ("discipline", "medicine"), ("scope", ["medicine"])):
+        r = p.step(dict(ans("allergy_any", True), **{k: v}))
+        assert r == {"accepted": False, "reason": msg("PV-CARE-TEAM-STEP")}
+    assert (p.log, p.session, p.check(), p.patient_view()) == before and p.session.role == "patient"
+
+def test_r11_sweep_malformed_role_key_shows_signed_line():
+    for case in (PH, FR, PP):
+        r = env(case, role="patient").step(dict(act("submit"), role="clinician"))
+        assert r["reason"] and not r["reason"].startswith("ERR:")
+
+
+# ---- round 11: every patient refusal leaves everything unchanged; malformed actions never echo ----
+BADF, BADV = "zzz_secret_field", "SYNTH-bad-value-937"
+
+def _passed_pp():
+    e = env(PP, "clinician", discipline="medicine")
+    for q in e.ids:
+        e.step(ans(q, False))
+    if e.check()["alerts"]:
+        e.step(act("review"))
+    assert e.step(act("submit"))["final"]
+    return as_role(e, "patient")
+
+def _granted():
+    e = env(role="patient"); e.step(grant_ev()); return e
+
+CASES = {
+    "action_type": (lambda: env(role="patient"), {"type": BADV, "timestamp": TS}),
+    "fields": (lambda: env(role="patient"), dict(ans("smokes", True), **{BADF: BADV})),
+    "timestamp": (lambda: env(role="patient"), dict(ans("smokes", True), timestamp=BADV)),
+    "interpreter_clinician_only": (lambda: env(role="patient"), dict(ans("smokes", True), interpreter=True)),
+    "on_behalf_clinician_only": (lambda: env(role="patient"), dict(ans("smokes", True), on_behalf="parent")),
+    "final": (_passed_pp, None),
+    "role_fixed_at_session_open": (lambda: env(role="patient"), dict(ans("smokes", True), role="clinician")),
+    "nothing_to_confirm": (lambda: env(role="patient"), act("confirm", "smokes")),
+    "grant_names_agent": (lambda: env(role="patient"), grant_ev(agent="")),
+    "grant_names_this_patient": (lambda: env(role="patient"), grant_ev(patient="SYNTH-pt-77")),
+    "nothing_to_revoke": (lambda: env(role="patient"), grant_ev("revoke")),
+    "question_id": (lambda: env(role="patient"), ans("no_such_q", True)),
+    "role_approve": (lambda: env(role="patient"), act("approve")),
+    "role_review": (lambda: env(role="patient"), act("review")),
+    "role_close_sameday": (lambda: env(role="patient"), dict(act("close_sameday", "smokes"), status=SD["confirmed"])),
+}
+
+def test_r11_cases_cover_every_mapped_code():
+    assert set(CASES) == set(F.PATIENT_LINE)
+
+@pytest.mark.parametrize("c", sorted(CASES))
+def test_r11_patient_refusal_changes_nothing(c):
+    mk, a = CASES[c]
+    p = mk()
+    if a is None:
+        a = ans(p.ids[0], True)
+    before = (copy.deepcopy(p.log), p.session, p.check(), p.patient_view())
+    r = p.step(a)
+    assert r == {"accepted": False, "reason": msg(F.PATIENT_LINE[c])}
+    assert (p.log, p.session, p.check(), p.patient_view()) == before and p.session.role == "patient"
+
+@pytest.mark.parametrize("c", ["action_type", "fields", "timestamp"])
+def test_r11_malformed_action_never_echoes(c):
+    p = CASES[c][0](); r = p.step(CASES[c][1])
+    seen = json.dumps([r, p.patient_view(), p.check(), p.log])
+    assert BADF not in seen and BADV not in seen and "timestamp" not in json.dumps([r, p.patient_view()])

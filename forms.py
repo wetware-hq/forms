@@ -28,6 +28,11 @@ CALL_PERMS = {
     "clinician": {"observe", "step"},
     "clinician_agent": {"observe", "step"},
 }
+# Patient screens never show a machine code: refusal code -> signed patient line id (ids only; wording is in WORDING.md).
+PATIENT_LINE = {"role_fixed_at_session_open": "PV-CARE-TEAM-STEP", "action_type": "PV-TRY-AGAIN", "fields": "PV-TRY-AGAIN", "timestamp": "PV-TRY-AGAIN", "interpreter_clinician_only": "PV-CARE-TEAM-STEP", "final": "PV-ALREADY-FINAL", "on_behalf_clinician_only": "PV-CARE-TEAM-STEP", "nothing_to_confirm": "PV-NOTHING-TO-CONFIRM", "grant_names_agent": "PV-GRANT-NAMES-AGENT",
+                "grant_names_this_patient": "PV-ONLY-YOU", "nothing_to_revoke": "PV-NOTHING-TO-REVOKE",
+                "question_id": "PV-QUESTION-NOT-FOUND", "role_approve": "PV-CARE-TEAM-STEP",
+                "role_review": "PV-CARE-TEAM-STEP", "role_close_sameday": "PV-CARE-TEAM-STEP"}
 MAX_FAILS = 3   # failed submissions in a row before the episode goes to the clinician queue
 DENY = {"patient": None, "patient_agent": "RF-ROLE-CONFIRM", "clinician": "RF-ROLE-CONFIRM",
         "clinician_agent": "RF-CLIN-AGENT"}
@@ -454,7 +459,7 @@ class FormEnv:
         if "on_behalf" in e and e["on_behalf"] not in RELATIONSHIP:
             return msg("ER-BAD-FIELD", field="on_behalf", item="answer")
         if t == "confirm" and CONFIRMER[self.schema["audience"]] != s.role:
-            return msg("RF-ROLE-CONFIRM")
+            return msg("PV-ROLE-CONFIRM" if s.role == "patient" else "RF-ROLE-CONFIRM")
         if self.q[i]["safety_critical"] and s.role in SCOPED and not in_scope(s, self.allowed_disciplines(i, meta)):
             return msg("RF-SCOPE", disciplines=", ".join(self.allowed_disciplines(i, meta)))
         if t == "confirm" and not (st[i]["state"] == "answered" and not st[i]["confirmed"]):
@@ -500,6 +505,8 @@ class FormEnv:
 
     def _refuse(self, why):
         """Every refusal carries a line id or a machine code; never an empty reason."""
+        if self.session.role == "patient":
+            why = msg(PATIENT_LINE[why[4:]]) if why.startswith("ERR:") and why[4:] in PATIENT_LINE else why
         return {"accepted": False, "reason": why}
 
     def replay(self, log):
