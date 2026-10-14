@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Local pre-push check (not run in CI). Fails if WORDING.md differs from what sync_wording.py would make from the
-signed file, or if any tracked file holds an internal name or a local workspace path.
+"""Pre-push check, installed as .git/hooks/pre-push and run in CI. Fails if WORDING.md differs from what
+sync_wording.py would make from the signed file (or, with --ci where there is no signed file, if WORDING.md does not
+match its own header hash), or if any tracked file holds an internal name or a local workspace path.
 
-    python3 scripts/prepush.py SIGNED.md"""
+    python3 scripts/prepush.py SIGNED.md
+    python3 scripts/prepush.py --ci"""
 import pathlib, re, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -23,8 +25,12 @@ def main(argv):
         print(__doc__, file=sys.stderr)
         return 2
     problems = []
-    want = sync_wording.render(pathlib.Path(argv[1]).read_text(), sync_wording.current_pending())
-    if (ROOT / "WORDING.md").read_text() != want:
+    have = (ROOT / "WORDING.md").read_text()
+    if argv[1] == "--ci":
+        head, _, body = have.partition("\n\n")
+        if not head.endswith("sha256: " + __import__("hashlib").sha256(body.encode()).hexdigest()):
+            problems.append("WORDING.md does not match its header hash")
+    elif have != sync_wording.render(pathlib.Path(argv[1]).read_text(), sync_wording.current_pending()):
         problems.append("WORDING.md differs from the signed file: run scripts/sync_wording.py")
     for p in tracked():
         try:

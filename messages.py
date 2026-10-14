@@ -24,7 +24,7 @@ KEY = {"condition plain wording": "condition", "Yes/No": "yesno", "alert answer"
        "job text": "job_text", "n": "n", "k": "k", "a": "a", "b": "b", "date": "date",
        "owner": "owner", "time": "time",
        "question or job plain wording": "plain", "id": "id", "field": "field", "item": "item", "disciplines": "disciplines", "discipline": "discipline",
-       "relationship": "relationship", "items": "items", "parent question text": "parent_text", "m": "m", "question text": "text", "item_id": "item_id", "event_id": "event_id", "status": "status"}
+       "relationship": "relationship", "items": "items", "parent question text": "parent_text", "m": "m", "question text": "text", "item_id": "item_id", "event_id": "event_id", "status": "status", "agent_name": "agent_name"}
 
 
 def msg(line_id, **f):

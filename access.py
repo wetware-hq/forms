@@ -14,7 +14,7 @@ class Invalid(Exception):
 class Session:
     actor: str
     role: str
-    discipline: str = None   # clinician only: medicine, nursing, physiotherapy, pharmacy, ...
+    discipline: str = None   # clinician only: a discipline named in the approved form or list data
     scope: tuple = ()        # clinician_agent only: disciplines of the clinician who granted it
 
 

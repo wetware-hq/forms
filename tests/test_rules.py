@@ -70,7 +70,7 @@ def test_ask_if_only_way_not_applicable():
     assert env().check()["not_applicable"] == []
 
 def test_negative_wording_refused():
-    for t in ("Do you have no allergies?", "Is it not marked?", "Never smoked?", "Without pain?", "None today?", "Can't walk?"):
+    for t in ("Do you have no allergies?", "Is it not marked?", "Never smoked?", "None today?", "Can't walk?"):
         assert bad_schema(lambda d: d["question"][0].update(text=t)) == msg("CK-NEGATIVE", n=1)
 
 def test_bitsets_derived_from_log():
@@ -202,7 +202,7 @@ def test_scripted_agent_episode():
 # ---------- rulings round 4 (Physician) ----------
 def test_audience_decides_confirmer():
     a = env(PP, "clinician_agent", scope=("medicine",)); a.step(ans("site_marked", True))
-    assert as_role(a, "patient").step(act("confirm", "site_marked"))["reason"] == ""   # no line: patient sees nothing
+    assert as_role(a, "patient").step(act("confirm", "site_marked"))["reason"] == msg("RF-ROLE-CONFIRM")   # S06b: never an empty reason
     b = env(role="patient_agent", grant=True); b.step(ans("smokes", True))
     assert as_role(b, "clinician", "medicine").step(act("confirm", "smokes"))["reason"] == msg("RF-ROLE-CONFIRM")
     c = as_role(a, "clinician", "medicine")
@@ -242,9 +242,9 @@ def test_roles_are_four_with_discipline():
 
 def test_permissions_table_by_role():
     assert F.PERMS == {
-        "patient": {"answer", "decline", "confirm", "grant", "revoke", "submit", "next"},
+        "patient": {"answer", "decline", "unknown", "confirm", "grant", "revoke", "submit", "next"},
         "patient_agent": {"answer", "submit", "next"},
-        "clinician": {"answer", "confirm", "approve", "submit", "review", "close_sameday", "next"},
+        "clinician": {"answer", "unknown", "confirm", "approve", "submit", "review", "close_sameday", "next"},
         "clinician_agent": {"answer", "submit", "next"}}
     for role, allowed in F.PERMS.items():
         assert allowed <= set(F.FIELDS) | {"next"} and role in F.DENY
@@ -328,7 +328,7 @@ def test_p09_roles_fixed_at_session_open():
     e = env()
     for k in ("role", "source", "actor", "discipline", "episode_id"):
         r = e.step(dict(ans("smokes", True), **{k: "clinician"}))
-        assert r["accepted"] is False and r["reason"] == ""                      # patient sees no code
+        assert r["accepted"] is False and r["reason"] == F.code("role_fixed_at_session_open")
 
 # ---------- wording lines ----------
 def test_line_pv_ans_self():
@@ -450,9 +450,9 @@ def test_line_pv_revoke():
 
 def test_confirm_needs_unconfirmed_agent_answer():
     p = env()
-    assert p.step(act("confirm", "smokes"))["reason"] == ""                      # nothing answered
+    assert p.step(act("confirm", "smokes"))["reason"] == F.code("nothing_to_confirm")
     p.step(ans("smokes", True))
-    assert p.step(act("confirm", "smokes"))["reason"] == ""                      # own answer: already final
+    assert p.step(act("confirm", "smokes"))["reason"] == F.code("nothing_to_confirm")
     a = env(role="patient_agent", grant=True); a.step(ans("smokes", True))
     q = as_role(a, "patient"); assert q.step(act("confirm", "smokes"))["accepted"]
     assert q.step(act("confirm", "smokes"))["accepted"] is False
@@ -494,7 +494,7 @@ def test_relationship_signed_list_clinician_only():
     assert set(RELATIONSHIP) == {"parent", "guardian", "sdm"}
     for bad in ("carer", "Aunt SYNTH-Mary", ""):
         assert sdm(bad)[1]["accepted"] is False
-    assert sdm("parent", role="patient")[1] == {"accepted": False, "reason": ""}
+    assert sdm("parent", role="patient")[1] == {"accepted": False, "reason": F.code("on_behalf_clinician_only")}
     assert sdm("parent", role="patient_agent", grant=True)[1]["accepted"] is False
     e, r = sdm("guardian")
     assert e.log[-1]["on_behalf"] == "guardian" and e.log[-1]["role"] == "clinician"
@@ -543,7 +543,7 @@ def test_p01_confirmed_agent_answer_drops_confirm_prompt():
     a = env(role="patient_agent", grant=True); a.step(ans("smokes", False))
     assert a.patient_view()["smokes"] == msg("PV-ANS-AGENT") + " " + msg("PV-CONFIRM", yesno=False)
     p = as_role(a, "patient"); assert p.step(act("confirm", "smokes"))["accepted"]
-    assert p.patient_view()["smokes"] == msg("PV-ANS-AGENT")
+    assert p.patient_view()["smokes"] == msg("PV-ANS-SELF")
 
 
 # ---- round 5 ----
@@ -571,7 +571,7 @@ def test_r5_01_agents_may_observe_and_step(role, kw):
 def test_r5_02_failed_submission_continues_and_is_logged():
     e = env(); r = e.step(act("submit"))
     assert r == {"accepted": True, "result": msg("ST-CHECK-FAIL"), "final": False,
-                 "missing": e.check()["blocked"] + e.check()["waiting_lines"]}
+                 "missing": e.check()["blocked"] + e.check()["flags"] + e.check()["waiting_lines"]}
     assert e.log[-1]["type"] == "submit" and e.log[-1]["result"] == "fail" and e.log[-1]["missing"] == [q for q in ALL_Q if q != "allergy_reaction_severe"]
     assert e.step(ans("smokes", True))["accepted"] and e.check()["submissions"] == 1
 
@@ -757,8 +757,8 @@ def test_r8_05_status_declined():
 
 def test_r8_05_status_answer_unknown_at_submission():
     e = env(); assert "sameday" not in e.patient_view() and e.check()["alerts"] == []
-    e.step(act("submit")); k = len(e.log) - 1
-    assert e.check()["alerts"] == ["allergy_any"]       # the follow-up waits, so it is not unknown yet
+    assert e.step(act("unknown", "allergy_any"))["accepted"]; k = len(e.log) - 1
+    assert e.check()["alerts"] == ["allergy_any"]
     assert sd_line("allergy_any", k, SD["unknown"]) in e.check()["clinician_queue"]
     assert e.patient_view()["sameday"] == msg("PV-SAMEDAY")
     e.step(act("submit")); assert sd_line("allergy_any", k, SD["unknown"]) in e.check()["clinician_queue"]
@@ -822,7 +822,7 @@ def test_r8_06_follow_up_not_needed_only_when_parent_no():
 
 def test_r8_07_grant_names_agent_and_patient():
     p = env()
-    assert p.step(grant_ev(agent=""))["reason"] == ""                       # patients never see machine codes
+    assert p.step(grant_ev(agent=""))["reason"] == F.code("grant_names_agent")
     assert p.step(grant_ev(patient="SYNTH-pt-99"))["accepted"] is False
     assert p.step(grant_ev())["accepted"] and p.log[-1]["agent"] == AGENT and p.log[-1]["patient"] == "SYNTH-pt-01"
     assert p.step(grant_ev(agent="SYNTH-agent-02", patient="SYNTH-pt-01"))["accepted"]
@@ -949,7 +949,7 @@ def test_r9_02_before_procedure_each_status(case):
     elif case == "declined":
         e = env(routed()); e.step(act("decline", "allergy_any")); k = len(e.log) - 1
     else:
-        e = env(routed()); e.step(act("submit")); k = len(e.log) - 1
+        e = env(routed()); e.step(act("unknown", "allergy_any")); k = len(e.log) - 1
     assert bp_line("allergy_any", k, SD[case]) in e.check()["clinician_queue"]
     shown = "before_procedure" in e.patient_view()
     assert shown is (case in ("confirmed", "declined", "unknown"))
@@ -1048,3 +1048,88 @@ def test_build_refuses_bad_disciplines(bad):
     def m(d):
         q = next(q for q in d["question"] if q["safety_critical"]); q["disciplines"] = bad
     assert bad_schema(m).startswith("Setup error: disciplines")
+
+
+# ---- S08 ruling: a blank safety question fails the submit and queues nothing ----
+@pytest.mark.parametrize("routed_case", [False, True])
+def test_s08_blank_safety_question_fails_submit_and_queues_nothing(routed_case):
+    e = env(routed()) if routed_case else env()
+    r = e.step(act("submit"))
+    assert r["accepted"] and r["final"] is False
+    assert msg("FL-UNKNOWN", n=e.num["allergy_any"]) in r["missing"]
+    c = e.check()
+    assert c["alerts"] == [] and not any(x.startswith(("Same-day", msg("CQ-BEFORE-PROC", item_id="", event_id="", status="")[:12])) for x in c["clinician_queue"])
+    assert "sameday" not in e.patient_view() and "before_procedure" not in e.patient_view()
+    assert all(x and not x.startswith("ERR:") for x in r["missing"])
+
+def test_s08_unknown_answer_follows_alert_route():
+    e = env(routed()); assert e.step(act("unknown", "allergy_any"))["accepted"]; k = len(e.log) - 1
+    q = e.check()["clinician_queue"]
+    assert bp_line("allergy_any", k, SD["unknown"]) in q and sd_line("allergy_any", k, SD["unknown"]) not in q
+    assert e.patient_view()["before_procedure"] == msg("PV-BEFORE-PROC") and "sameday" not in e.patient_view()
+
+def test_s08_unknown_only_patient_or_clinician_and_replays():
+    for role, d, sc in (("patient_agent", None, ()), ("clinician_agent", None, ("medicine",))):
+        e = env(role=role, discipline=d, scope=sc, grant=role == "patient_agent")
+        assert e.step(act("unknown", "allergy_any"))["accepted"] is False
+    c = env(role="clinician", discipline="medicine"); assert c.step(act("unknown", "allergy_any"))["accepted"]
+    f = F.FormEnv(); f.reset(PH, "SYNTH-pt-01", "patient", EP); f.replay(c.log)
+    assert f.check() == c.check() and f.check()["answers"]["allergy_any"] == "unknown"
+
+# ---- trace faults ----
+def test_t1_confirmed_agent_answer_reads_you_answered():
+    e = env(role="patient_agent", grant=True); e.step(ans("smokes", False))
+    p = as_role(e, "patient"); assert p.patient_view()["smokes"].startswith(msg("PV-ANS-AGENT"))
+    assert p.step(act("confirm", "smokes"))["accepted"]
+    assert p.patient_view()["smokes"] == msg("PV-ANS-SELF")
+
+def test_t2_scope_refusal_before_nothing_to_confirm():
+    e = env(FR, role="clinician", discipline="medicine", approve="physiotherapy")
+    i = next(i for i in e.ids if e.q[i]["safety_critical"] and e.q[i].get("disciplines"))
+    r = e.step(act("confirm", i))
+    assert r["reason"].startswith(msg("RF-SCOPE", disciplines="")[:12])
+
+def test_t2_agent_clin_form_before_role_confirm():
+    e = env(FR, role="patient_agent")
+    assert e.step(act("confirm", e.ids[0]))["reason"] == msg("RF-AGENT-CLIN-FORM")
+
+def test_t3_bad_on_behalf_is_bad_field_and_no_empty_refusals():
+    c = env(role="clinician", discipline="medicine")
+    r = c.step(dict(ans("smokes", False), on_behalf="cousin"))
+    assert r["reason"] == msg("ER-BAD-FIELD", field="on_behalf", item="answer")
+    f = env(FR, role="patient")
+    assert f.step(act("confirm", f.ids[0]))["reason"] == msg("RF-ROLE-CONFIRM")
+
+def test_t3_no_refusal_is_ever_empty():
+    for case in (PH, FR, PP):
+        for role, d, sc in (("patient", None, ()), ("patient_agent", None, ()), ("clinician", "medicine", ()),
+                            ("clinician_agent", None, ("medicine",))):
+            e = env(case, role=role, discipline=d, scope=sc)
+            for t in ("answer", "decline", "confirm", "unknown", "review", "approve", "grant", "close_sameday"):
+                a = ans(e.ids[0], True) if t == "answer" else act(t, e.ids[0])
+                r = e.step(a)
+                assert r["accepted"] or r["reason"], (case, role, t)
+
+@pytest.mark.parametrize("text", ["Can the patient walk without help?", "Is there anything nobody told you?"])
+def test_t4_without_is_not_a_negative(text):
+    d = copy.deepcopy(SPH); d["question"][2]["text"] = text
+    F.check_schema(d)
+
+@pytest.mark.parametrize("text", ["Do you not smoke?", "Have you never had surgery?", "Don't you smoke?", "Is there no allergy?"])
+def test_t4_true_negatives_still_caught(text):
+    assert bad_schema(lambda d: d["question"][2].update(text=text)) == msg("CK-NEGATIVE", n=3)
+
+
+# ---- hash and CLI edges (mutation) ----
+def test_schema_hash_is_key_order_free_and_utf8():
+    d = {"b": "é", "a": 1}
+    want = __import__("hashlib").sha256('{"a": 1, "b": "é"}'.encode()).hexdigest()
+    assert F.schema_hash(d) == want == F.schema_hash({"a": 1, "b": "é"})
+
+def test_cli_commands_need_exact_positions(tmp_path):
+    log = str(tmp_path / "l.jsonl"); open(log, "w").close()
+    assert F.main(["f", "build", PH, "extra"]) == 2
+    assert F.main(["f", "status", PH]) == 2
+    assert F.main(["f", "answer", PH, log, EP, "smokes=true", "--actor", "SYNTH-pt-01", "--ts", TS]) == 2
+    assert F.main(["f", "nosuch", PH, log, EP, "--role", "patient", "--actor", "SYNTH-pt-01", "--ts", TS]) == 2
+    assert F.main(["f", "answer", PH, log, "--role", "patient", "--actor", "SYNTH-pt-01", "--ts", TS]) == 2

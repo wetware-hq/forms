@@ -1,3 +1,4 @@
+import pytest
 """WORDING.md is the only wording source. These checks run in CI with no access to the signed file."""
 import ast, hashlib, pathlib, re
 import messages
@@ -42,7 +43,7 @@ def test_messages_py_holds_no_wording():
 
 
 def test_pending_lines_are_not_signed():
-    assert set(messages.PENDING) == {"PV-GRANT-LIST", "PV-REVOKE-LIST", "RF-NO-GRANT-LIST"}
+    assert set(messages.PENDING) == set()
     assert not set(messages.PENDING) & set(messages.LINES)
 
 
@@ -77,7 +78,7 @@ def test_sync_render_is_deterministic_and_drops_signed_pending(tmp_path):
              "| LT-X | clinician | x | Not a two-column row. |\n"
     out = sw.render(signed, [("RF-NEW", "Draft.")])
     assert out == sw.render(signed, [("RF-NEW", "Draft.")])
-    assert "| PV-OPEN | Not answered yet |" in out and "LT-X" not in out and "| ST-CONFIRMED | confirmed |" in out and "| RF-NEW | Draft. | pending |" in out
+    assert "| PV-OPEN | Not answered yet |" in out and "| LT-X | Not a two-column row. |" in out and "| ST-CONFIRMED | confirmed |" in out and "| RF-NEW | Draft. | pending |" in out
     head, body = out.split("\n\n", 1)
     assert head.endswith(__import__("hashlib").sha256(body.encode()).hexdigest())
 
@@ -91,3 +92,25 @@ def test_every_status_and_relationship_resolves_to_a_row():
     for k in ("unconfirmed", "confirmed", "changed", "declined", "unknown"):
         assert f"ST-{k.upper()}" in messages.LINES
     assert "## Relationship roles" not in TEXT and "## Queue statuses" not in TEXT
+
+
+def test_sync_keeps_every_signed_row_and_refuses_short_copies():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync", ROOT / "scripts" / "sync_wording.py")
+    s = importlib.util.module_from_spec(spec); spec.loader.exec_module(s)
+    signed = "| PV-A | one |\n| LT-B | patient | x | two |\n"
+    out = s.render(signed)
+    assert "| PV-A | one |" in out and "| LT-B | two |" in out
+    with pytest.raises(SystemExit):
+        s.verify(signed, "| PV-A | one |\n")
+    with pytest.raises(SystemExit):
+        s.verify(signed, "| PV-A | one |\n| LT-C | two |\n")
+    with pytest.raises(SystemExit):
+        s.verify(signed, "| PV-A | one |\n| PV-A | one |\n")
+
+
+def test_wording_has_every_signed_row():
+    import re
+    body = TEXT.split("\n\n", 1)[1].split("## Pending signature")[0]
+    rows = re.findall(r"^\| ([A-Z]{2,4}-[A-Z0-9-]+) \|", body, re.M)
+    assert len(rows) == len(set(rows)) == len(messages.LINES) and len(rows) > 100
