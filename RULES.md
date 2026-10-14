@@ -1,7 +1,7 @@
 # Rule register
 
 Signer is who signed the rule. class: safety where signed as safety; blank rows are still for Physician to mark.
-Wording rows (W-) are the fixed lines this repo emits; 'unsigned (draft)' = the wording table still marks that section DRAFT. CK-TWO-FACTS is not used: ruling R-03 replaced it with CK-TWO-ITEMS.
+Wording rows (W-) are the fixed lines this repo emits. All are signed by Physician; the source of truth is WORDING.md, checked word for word by scripts/rulecheck.py. CK-TWO-FACTS is not used: ruling R-03 replaced it with CK-TWO-ITEMS.
 P rows not listed here (P-04, P-05, P-08) apply only to the other repo and are registered there.
 
 | id | rule | signer | class | protects_role | test names |
@@ -44,47 +44,48 @@ P rows not listed here (P-04, P-05, P-08) apply only to the other repo and are r
 | S-03 | Unregistered users (carer, assistant, family) are refused; no such role in v1 | Scientist / Physician | safety | patient | test_unregistered_role_refused |
 | S-05 | clinician_agent is limited to the scope of practice of the clinician who granted it | Physician | safety | patient | test_clinician_agent_limited_to_granter_scope |
 | S-04 | clinician_agent can draft and propose, never confirm, cancel or approve | Physician | safety | patient | test_clinician_agent_cannot_confirm_or_approve |
-| P-01 | Consent failures (Patient): each fails the gate on any seed: (a) an agent's answer shown as "You answered" before the patient confirms; (b) any agent action accepted after a revoke; (c) a decline counted as a no. | Physician | safety |  | test_p01_consent_failures |
+| S-06 | Strict Boolean: an answer value, and every yes/no field in a form (alert_answer, safety_critical, clinician_must_confirm, two_item_ok, ask_if equals), is accepted only if it is a real true or false (type is bool). 1, 0, "yes", "false", null, 1.0 and anything else are refused with RF-NOT-BOOL; a refused answer is never logged and the question stays unanswered | Physician | safety | patient | test_s06_answer_strict_bool_refused_not_logged, test_s06_answer_real_bool_accepted, test_s06_schema_yes_no_fields_strict_bool, test_s06_ask_if_equals_strict_bool |
+| P-01 | Consent failures (Patient): each fails the gate on any seed: (a) an agent's answer shown as "You answered" before the patient confirms; (b) any agent action accepted after a revoke; (c) a decline counted as a no. | Physician | safety |  | test_p01_consent_failures, test_p01_confirmed_agent_answer_drops_confirm_prompt |
 | P-02 | Grant and revoke (Patient): only the patient's own session can grant or revoke their agent's access to a form; both are logged. Without a grant, an agent session is refused. The patient can see every answer and who gave it. A grant covers only forms whose audience is patient. | Physician | safety |  | test_p02_grant_and_revoke |
 | P-03 | Patient's agent role (Engineer/Patient): patient, patient's agent and clinician are separate roles. Only a person's own session can confirm, decline or cancel. The patient's agent answering a clinician form is refused with a table line. | Physician | safety |  | test_p03_separate_roles_own_session |
 | P-06 | Version lock (Physician): approval covers that form/list version only. Any edit needs fresh approval by a clinician; the approval view shows only what changed from the last approved version. | Physician | safety |  | test_p06_version_lock_and_diff_view |
 | P-07 | Propose tools (Director/Scientist): propose_form and propose_list take effect only after a clinician approves in their own session. A proposed form must first pass the fixed checker: one fact per question, no negatives, alert answer set, conditions point back only and never loop, safety-critical questions marked, every condition has plain wording. | Physician | safety |  | test_p07_propose_needs_checker_and_approval |
 | P-09 | Roles fixed at session start (Engineer): roles are set when the session opens and never passed in a call. | Physician | safety |  | test_p09_roles_fixed_at_session_open |
-| W-PV-ANS-SELF | You answered | Educator / Patient / Physician |  |  | test_line_pv_ans_self |
-| W-PV-ANS-AGENT | Your assistant answered. You haven't checked this yet. | Educator / Patient / Physician |  |  | test_line_pv_ans_agent |
-| W-PV-DECLINED | You chose not to answer | Educator / Patient / Physician |  |  | test_line_pv_declined |
-| W-PV-SKIPPED | Not asked, because [condition plain wording] | Educator / Patient / Physician |  |  | test_line_pv_skipped |
-| W-PV-OPEN | Not answered yet | Educator / Patient / Physician |  |  | test_line_pv_open |
-| W-PV-GRANT | Your assistant can help with this form (from [date]) | Educator / Patient / Physician |  |  | test_line_pv_grant |
-| W-PV-REVOKE | Your assistant can no longer help with this form (from [date]) | Educator / Patient / Physician |  |  | test_line_pv_revoke |
-| W-PV-REASK | We need to ask this again because the question changed or this is a new visit. | Educator / Patient / Physician |  |  | test_line_pv_reask |
-| W-PV-CONFIRM | Your assistant answered [Yes/No]. Is that right? | Educator / Patient / Physician |  |  | test_line_pv_confirm |
-| W-RF-ROLE-CONFIRM | Refused: only the patient's own session can confirm or decline this answer. | Educator / Patient / Physician |  |  | test_line_rf_role_confirm |
-| W-RF-NO-GRANT | Refused: the patient has not let an assistant help with this form. | Educator / Patient / Physician |  |  | test_line_rf_no_grant |
-| W-RF-REVOKED | Refused: the patient stopped this assistant helping on [date]. | Educator / Patient / Physician |  |  | test_line_rf_revoked |
-| W-RF-NOT-BOOL | Refused: answers must be Yes or No. | Educator / Patient / Physician |  |  | test_line_rf_not_bool |
-| W-RF-NOT-APPROVED | Refused: this form or list is not approved by a clinician yet. | Educator / Patient / Physician |  |  | test_line_rf_not_approved |
-| W-CK-NEGATIVE | Question [n] is worded as a negative. Reword it as a plain question. | Educator / Patient / Physician |  |  | test_line_ck_negative |
-| W-CK-NO-ALERT | Question [n] has no alert answer set. | Educator / Patient / Physician |  |  | test_line_ck_no_alert |
-| W-CK-COND-ORDER | Question [n] depends on a later question. | Educator / Patient / Physician |  |  | test_line_ck_cond_order |
-| W-CK-COND-WORDS | Question [n] has a condition with no plain wording. | Educator / Patient / Physician |  |  | test_line_ck_cond_words |
-| W-BK-UNANSWERED | Not finished: [k] questions still need an answer. | Educator / Patient / Physician |  |  | test_line_bk_unanswered |
-| W-BK-CLIN-CONFIRM | Not finished: a clinician must confirm question [n]. | Educator / Patient / Physician |  |  | test_line_bk_clin_confirm |
-| W-BK-STALE | Answer to question [n] is from another episode or an old version, so it must be asked again. | Educator / Patient / Physician |  |  | test_line_bk_stale |
-| W-FL-ALERT | Alert: question [n] was answered [alert answer]. | Educator / Patient / Physician |  |  | test_line_fl_alert |
-| W-FL-UNKNOWN | Alert: question [n] is safety-critical and was not answered. Treat as a risk. | Educator / Patient / Physician |  |  | test_line_fl_unknown |
-| W-FL-DECLINED | Alert: the patient chose not to answer question [n], which is safety-critical. Treat as a risk and ask in person. | Educator / Patient / Physician |  |  | test_line_fl_declined |
-| W-RF-AGENT-CLIN-FORM | Refused: the patient's assistant can only help with the patient's own forms. | unsigned (draft) |  |  | test_line_rf_agent_clin_form |
-| W-CK-TWO-ITEMS | Question [n] lists more than one thing. Split it, or send it to a clinician to check. | unsigned (draft) |  |  | test_line_ck_two_items |
-| W-CQ-TWO-ITEMS | For a clinician to check: question [n] names more than one thing. | unsigned (draft) |  |  | test_line_cq_two_items |
-| W-ST-FORM-DONE | Form complete: every question has an answer, or was skipped or declined. | unsigned (draft) |  |  | test_line_st_form_done |
-| W-PV-NEXT | Next for you: [question or job plain wording] | unsigned (draft) |  |  | test_line_pv_next |
-| W-PV-NOTHING-NEXT | There's nothing for you to do right now. | unsigned (draft) |  |  | test_line_pv_nothing_next |
-| W-ER-DUP-ID | Setup error: the id [id] is used more than once. | unsigned (draft) |  |  | test_line_er_dup_id |
-| W-ER-BAD-FIELD | Setup error: [field] in [item] is missing or not allowed. | unsigned (draft) |  |  | test_line_er_bad_field |
-| W-ER-BAD-COMMAND | Command not recognised. Run with --help to see the commands. | unsigned (draft) |  |  | test_line_er_bad_command |
-| W-RF-SCOPE | Refused: this item can only be confirmed, cancelled or ticked by [disciplines]. | unsigned (draft) |  |  | test_line_rf_scope |
-| W-RF-UNREGISTERED | Refused: only registered health professionals and patients can use this in version 1. | unsigned (draft) |  |  | test_line_rf_unregistered |
-| W-RF-CLIN-AGENT | Refused: a clinician's assistant can draft and propose, but cannot confirm, cancel or approve. | unsigned (draft) |  |  | test_line_rf_clin_agent |
-| W-PV-ANS-CLIN | Your care team answered: [discipline], on [date]. | unsigned (draft) |  |  | test_line_pv_ans_clin |
-| W-PV-ANS-SDM | [relationship] answered, recorded by your care team on [date]. | unsigned (draft) |  |  | test_line_pv_ans_sdm |
+| W-PV-ANS-SELF | You answered | Physician (signed) |  |  | test_line_pv_ans_self |
+| W-PV-ANS-AGENT | Your assistant answered. You haven't checked this yet. | Physician (signed) |  |  | test_line_pv_ans_agent |
+| W-PV-DECLINED | You chose not to answer | Physician (signed) |  |  | test_line_pv_declined |
+| W-PV-SKIPPED | Not asked, because [condition plain wording] | Physician (signed) |  |  | test_line_pv_skipped |
+| W-PV-OPEN | Not answered yet | Physician (signed) |  |  | test_line_pv_open |
+| W-PV-GRANT | Your assistant can help with this form (from [date]) | Physician (signed) |  |  | test_line_pv_grant |
+| W-PV-REVOKE | Your assistant can no longer help with this form (from [date]) | Physician (signed) |  |  | test_line_pv_revoke |
+| W-PV-REASK | We need to ask this again because the question changed or this is a new visit. | Physician (signed) |  |  | test_line_pv_reask |
+| W-PV-CONFIRM | Your assistant answered [Yes/No]. Is that right? | Physician (signed) |  |  | test_line_pv_confirm |
+| W-RF-ROLE-CONFIRM | Refused: only the patient's own session can confirm or decline this answer. | Physician (signed) |  |  | test_line_rf_role_confirm |
+| W-RF-NO-GRANT | Refused: the patient has not let an assistant help with this form. | Physician (signed) |  |  | test_line_rf_no_grant |
+| W-RF-REVOKED | Refused: the patient stopped this assistant helping on [date]. | Physician (signed) |  |  | test_line_rf_revoked |
+| W-RF-NOT-BOOL | Refused: answers must be Yes or No. | Physician (signed) |  |  | test_line_rf_not_bool |
+| W-RF-NOT-APPROVED | Refused: this form or list is not approved by a clinician yet. | Physician (signed) |  |  | test_line_rf_not_approved |
+| W-CK-NEGATIVE | Question [n] is worded as a negative. Reword it as a plain question. | Physician (signed) |  |  | test_line_ck_negative |
+| W-CK-NO-ALERT | Question [n] has no alert answer set. | Physician (signed) |  |  | test_line_ck_no_alert |
+| W-CK-COND-ORDER | Question [n] depends on a later question. | Physician (signed) |  |  | test_line_ck_cond_order |
+| W-CK-COND-WORDS | Question [n] has a condition with no plain wording. | Physician (signed) |  |  | test_line_ck_cond_words |
+| W-BK-UNANSWERED | Not finished: [k] questions still need an answer. | Physician (signed) |  |  | test_line_bk_unanswered |
+| W-BK-CLIN-CONFIRM | Not finished: a clinician must confirm question [n]. | Physician (signed) |  |  | test_line_bk_clin_confirm |
+| W-BK-STALE | Answer to question [n] is from another episode or an old version, so it must be asked again. | Physician (signed) |  |  | test_line_bk_stale |
+| W-FL-ALERT | Alert: question [n] was answered [alert answer]. | Physician (signed) |  |  | test_line_fl_alert |
+| W-FL-UNKNOWN | Alert: question [n] is safety-critical and was not answered. Treat as a risk. | Physician (signed) |  |  | test_line_fl_unknown |
+| W-FL-DECLINED | Alert: the patient chose not to answer question [n], which is safety-critical. Treat as a risk and ask in person. | Physician (signed) |  |  | test_line_fl_declined |
+| W-RF-AGENT-CLIN-FORM | Refused: the patient's assistant can only help with the patient's own forms. | Physician (signed) |  |  | test_line_rf_agent_clin_form |
+| W-CK-TWO-ITEMS | Question [n] lists more than one thing. Split it, or send it to a clinician to check. | Physician (signed) |  |  | test_line_ck_two_items |
+| W-CQ-TWO-ITEMS | For a clinician to check: question [n] names more than one thing. | Physician (signed) |  |  | test_line_cq_two_items |
+| W-ST-FORM-DONE | Form complete: every question has an answer, or was skipped or declined. | Physician (signed) |  |  | test_line_st_form_done |
+| W-PV-NEXT | Next for you: [question or job plain wording] | Physician (signed) |  |  | test_line_pv_next |
+| W-PV-NOTHING-NEXT | There's nothing for you to do right now. | Physician (signed) |  |  | test_line_pv_nothing_next |
+| W-ER-DUP-ID | Setup error: the id [id] is used more than once. | Physician (signed) |  |  | test_line_er_dup_id |
+| W-ER-BAD-FIELD | Setup error: [field] in [item] is missing or not allowed. | Physician (signed) |  |  | test_line_er_bad_field |
+| W-ER-BAD-COMMAND | Command not recognised. Run with --help to see the commands. | Physician (signed) |  |  | test_line_er_bad_command |
+| W-RF-SCOPE | Refused: this item can only be confirmed, cancelled or ticked by [disciplines]. | Physician (signed) |  |  | test_line_rf_scope |
+| W-RF-UNREGISTERED | Refused: only registered health professionals and patients can use this in version 1. | Physician (signed) |  |  | test_line_rf_unregistered |
+| W-RF-CLIN-AGENT | Refused: a clinician's assistant can draft and propose, but cannot confirm, cancel or approve. | Physician (signed) |  |  | test_line_rf_clin_agent |
+| W-PV-ANS-CLIN | Your care team answered: [discipline], on [date]. | Physician (signed) |  |  | test_line_pv_ans_clin |
+| W-PV-ANS-SDM | [relationship] answered for you, recorded by your care team on [date]. | Physician (signed) |  |  | test_line_pv_ans_sdm |

@@ -55,7 +55,7 @@ def test_question_fields_required():
     for k in ("id", "version", "text", "safety_critical", "clinician_must_confirm"):
         assert bad_schema(lambda d: d["question"][0].pop(k)) == msg("ER-BAD-FIELD", field=k, item="question 1")
     assert bad_schema(lambda d: d["question"][0].update(extra=1)) == msg("ER-BAD-FIELD", field="extra", item="question 1")
-    assert bad_schema(lambda d: d["question"][0].update(safety_critical="yes")).startswith("Setup error")
+    assert bad_schema(lambda d: d["question"][0].update(safety_critical="yes")) == msg("RF-NOT-BOOL")
 
 def test_ask_if_only_way_not_applicable():
     e = env(); e.step(ans("allergy_any", False))
@@ -478,7 +478,7 @@ def test_line_pv_ans_sdm():
     for rel, words in (("parent", "Your parent"), ("guardian", "Your guardian"),
                        ("sdm", "The person legally allowed to decide for you")):
         e, r = sdm(rel)
-        assert r["accepted"] and e.patient_view()["smokes"] == f"{words} answered, recorded by your care team on 1936-05-02."
+        assert r["accepted"] and e.patient_view()["smokes"] == f"{words} answered for you, recorded by your care team on 1936-05-02."
 
 def test_relationship_signed_list_clinician_only():
     from messages import RELATIONSHIP
@@ -505,3 +505,33 @@ def test_flags_only_where_due():
     assert not any("question 1" in x for x in e.check()["flags"])               # answered, not the alert answer
     assert msg("RF-NOT-APPROVED") in env(approve=None).check()["blocked"]
     assert msg("RF-NOT-APPROVED") not in env().check()["blocked"]
+
+
+STRICT_WRONG = [1, 0, "yes", "false", "true", None, 1.0, 0.0, "", [], {}]
+
+@pytest.mark.parametrize("v", STRICT_WRONG, ids=repr)
+def test_s06_answer_strict_bool_refused_not_logged(v):
+    e = env(); n = len(e.log)
+    assert e.step(ans("smokes", v)) == {"accepted": False, "reason": msg("RF-NOT-BOOL")}
+    assert len(e.log) == n and e.check()["answers"]["smokes"] == "unanswered"
+
+@pytest.mark.parametrize("v", [True, False])
+def test_s06_answer_real_bool_accepted(v):
+    e = env(); assert e.step(ans("smokes", v))["accepted"] and e.log[-1]["value"] is v
+
+@pytest.mark.parametrize("k", ["alert_answer", "safety_critical", "clinician_must_confirm", "two_item_ok"])
+@pytest.mark.parametrize("v", STRICT_WRONG, ids=repr)
+def test_s06_schema_yes_no_fields_strict_bool(k, v):
+    assert bad_schema(lambda d: d["question"][0].update({k: v})) == msg("RF-NOT-BOOL")
+
+@pytest.mark.parametrize("v", STRICT_WRONG, ids=repr)
+def test_s06_ask_if_equals_strict_bool(v):
+    def f(d):
+        q = next(q for q in d["question"] if "ask_if" in q); q["ask_if"]["equals"] = v
+    assert bad_schema(f) == msg("RF-NOT-BOOL")
+
+def test_p01_confirmed_agent_answer_drops_confirm_prompt():
+    a = env(role="patient_agent", grant=True); a.step(ans("smokes", False))
+    assert a.patient_view()["smokes"] == msg("PV-ANS-AGENT") + " " + msg("PV-CONFIRM", yesno=False)
+    p = as_role(a, "patient"); assert p.step(act("confirm", "smokes"))["accepted"]
+    assert p.patient_view()["smokes"] == msg("PV-ANS-AGENT")

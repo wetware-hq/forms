@@ -3,6 +3,10 @@ Text in [ ] is filled from schema/table fields only. Conditions with no wording 
 return a machine code 'ERR:<name>' (not prose) so they stay visible as wording gaps."""
 import re
 
+WORDING_SOURCE = "WORDING.md"   # signed wording table; LINES must match it word for word
+SIGNER = "Physician"
+STATUS = "signed"
+
 LINES = {
     "PV-ANS-SELF": "You answered",
     "PV-ANS-AGENT": "Your assistant answered. You haven't checked this yet.",
@@ -54,7 +58,7 @@ LINES = {
     "RF-CLIN-AGENT": "Refused: a clinician's assistant can draft and propose, but cannot confirm, cancel or approve.",
     "WT-WAITING": "Waiting: this job can start once [job text] is done.",
     "PV-ANS-CLIN": "Your care team answered: [discipline], on [date].",
-    "PV-ANS-SDM": "[relationship] answered, recorded by your care team on [date].",
+    "PV-ANS-SDM": "[relationship] answered for you, recorded by your care team on [date].",
 }
 # Signed list of legal decision-making roles: key -> (patient wording, clinician wording). No free text.
 RELATIONSHIP = {

@@ -1,12 +1,33 @@
 #!/usr/bin/env python3
 """Exit 1 if (a) a RULES.md row names no existing test, or (b) code outside messages.py holds
 prose string literals (user-facing text must come from messages.LINES), or (c) msg() uses an
-id that is not in the wording table. Exit 0 otherwise."""
+id that is not in the signed wording table, or (d) a messages.LINES entry or a RULES.md W- row
+differs from the signed table WORDING.md. WORDING.md is the only wording source. Exit 0 otherwise."""
 import ast, pathlib, re, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import messages
+
+
+def signed_table():
+    rows = re.findall(r"^\| ([A-Z]{2}-[A-Z0-9-]+) \| (.*) \|$", (ROOT / "WORDING.md").read_text(), re.M)
+    return dict(rows)
+
+
+SIGNED = signed_table()
+
+
+def signed_problems():
+    out = [f"messages.py: {k} not word for word as signed" for k, v in messages.LINES.items() if SIGNED.get(k) != v]
+    for line in (ROOT / "RULES.md").read_text().splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 6 and cells[0].startswith("W-"):
+            if SIGNED.get(cells[0][2:]) != cells[1]:
+                out.append(f"RULES.md: {cells[0]} not word for word as signed")
+            if "signed" not in cells[2] or "unsigned" in cells[2]:
+                out.append(f"RULES.md: {cells[0]} not marked signed")
+    return out
 
 
 def tests_defined():
@@ -44,13 +65,13 @@ def literal_problems():
                     and re.search(r"[A-Za-z]+ [A-Za-z]+", n.value):
                 out.append(f"{p.name}:{n.lineno}: prose literal {n.value[:40]!r}")
             if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "msg" and n.args \
-                    and isinstance(n.args[0], ast.Constant) and n.args[0].value not in messages.LINES:
+                    and isinstance(n.args[0], ast.Constant) and n.args[0].value not in SIGNED:
                 out.append(f"{p.name}:{n.lineno}: msg id {n.args[0].value!r} not in wording table")
     return out
 
 
 def main():
-    reg, lit = register_problems(), literal_problems()
+    reg, lit = register_problems(), literal_problems() + signed_problems()
     for x in reg:
         print("REGISTER", x)
     for x in lit:

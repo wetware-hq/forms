@@ -30,7 +30,9 @@ Scope of practice applies per item: a safety-critical question can only be confi
 
 ## Answers given for the patient
 
-When a parent, guardian or substitute decision-maker answers for the patient, a clinician records it in their own session with `--on_behalf parent|guardian|sdm` (the field `on_behalf` on an `answer` event). Only a clinician may set it, and only from that signed list; free text and other values such as `carer` are refused (exit 2). The log keeps the relationship with the answer, `export` shows it under `given_by`, and the patient sees "[relationship] answered, recorded by your care team on [date]." Never enter these answers through the patient's own session.
+Version 1 gives parents, guardians and substitute decision-makers no session of their own. When one answers, a clinician records it in their own session and picks the role from a fixed list. The patient then sees who answered for them. Never use the patient's session for this.
+
+In practice, when a parent, guardian or substitute decision-maker answers for the patient, a clinician records it in their own session with `--on_behalf parent|guardian|sdm` (the field `on_behalf` on an `answer` event). Only a clinician may set it, and only from that signed list; free text and other values such as `carer` are refused (exit 2). The log keeps the relationship with the answer, `export` shows it under `given_by`, and the patient sees "[relationship] answered for you, recorded by your care team on [date]." Never enter these answers through the patient's own session.
 
 ## Interface
 
@@ -69,10 +71,10 @@ Both examples stop at exit 1: the forms are not complete yet.
 
 ## Rules
 
-Every rule is a row in `RULES.md` with its signer, class (safety or efficacy), the role it protects and the tests that plant its failure. Everything a person sees comes from the fixed wording table in `messages.py`; a patient is never shown a machine code.
+Every rule is a row in `RULES.md` with its signer, class (safety or efficacy), the role it protects and the tests that plant its failure. Everything a person sees comes from `messages.py`, which must match the signed wording table `WORDING.md` word for word; a patient is never shown a machine code.
 
 ```bash
-python3 scripts/rulecheck.py                  # exit 0: every rule has a test, all wording is from messages.py
+python3 scripts/rulecheck.py                  # exit 0: every rule has a test, all wording matches WORDING.md
 python3 scripts/mutate.py forms.py _gate      # exit 0: every mutant of the gate is caught
 ```
 
@@ -86,7 +88,7 @@ Contributors run pytest and `scripts/rulecheck.py` before every commit. Agent ru
 
 ## Status
 
-An MCP server is planned. There isn't one yet. Some wording lines in `RULES.md` are still marked unsigned (draft).
+An MCP server is planned. There isn't one yet. All wording lines are signed; `WORDING.md` is the signed table.
 
 ## Licence
 

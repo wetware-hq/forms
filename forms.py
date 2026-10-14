@@ -67,8 +67,8 @@ def check_schema(d):
         if NEG_RE.search(t):
             raise Invalid(msg("CK-NEGATIVE", n=n))
         for k in ("alert_answer", "safety_critical", "clinician_must_confirm", "two_item_ok"):
-            if type(q.get(k, False)) is not bool:
-                raise Invalid(msg("ER-BAD-FIELD", field=k, item=item))
+            if k in q and type(q[k]) is not bool:
+                raise Invalid(msg("RF-NOT-BOOL"))
         if TWO_RE.search(t) and not q.get("two_item_ok"):
             raise Invalid(msg("CK-TWO-ITEMS", n=n))
         if "disciplines" in q and (not q["safety_critical"] or not isinstance(q["disciplines"], list)
@@ -76,9 +76,10 @@ def check_schema(d):
             raise Invalid(msg("ER-BAD-FIELD", field="disciplines", item=item))
         if "ask_if" in q:
             a = q["ask_if"]
-            if not isinstance(a, dict) or not {"id", "equals"} <= set(a) <= {"id", "equals", "wording"} \
-                    or type(a["equals"]) is not bool:
+            if not isinstance(a, dict) or not {"id", "equals"} <= set(a) <= {"id", "equals", "wording"}:
                 raise Invalid(msg("ER-BAD-FIELD", field="ask_if", item=item))
+            if type(a["equals"]) is not bool:
+                raise Invalid(msg("RF-NOT-BOOL"))
             if a["id"] not in seen:
                 raise Invalid(msg("CK-COND-ORDER", n=n))
             if not isinstance(a.get("wording"), str) or not a["wording"].strip():
