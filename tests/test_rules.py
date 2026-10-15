@@ -1320,7 +1320,7 @@ def _declined():
 
 def _signed_by_id(lid):
     import os, re
-    sib = pathlib.Path(os.environ.get("STACK_SIBLINGS_DIR") or ROOT.parent)
+    sib = pathlib.Path(os.environ.get("WARD_SIBLINGS_DIR") or ROOT.parent)
     raw = (sib / "wording" / "forms_orders_lines_SIGNED.md").read_bytes().decode("utf-8")
     return re.search(rf"^\| {re.escape(lid)} \|(?:.*\|)? (.*) \|$", raw, re.M).group(1)
 

@@ -7,8 +7,8 @@ import prepush
 def test_answer_files_refused():
     root = pathlib.Path("/r")
     got = prepush.answer_files([root / "stack_truth" / "S01" / "notes.md", root / "x" / "truth.toml",
-                                root / "patient_wording.md", root / "stack.local.toml", root / "truth.md", root / "a.py"])
-    assert [p.name for p in got] == ["notes.md", "truth.toml", "patient_wording.md", "stack.local.toml"]
+                                root / "patient_wording.md", root / "ward.local.toml", root / "truth.md", root / "a.py"])
+    assert [p.name for p in got] == ["notes.md", "truth.toml", "patient_wording.md", "ward.local.toml"]
 
 
 def test_repo_has_no_answer_files():

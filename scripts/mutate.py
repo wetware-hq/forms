@@ -97,7 +97,7 @@ def main(argv):
     with tempfile.TemporaryDirectory() as td:
         work = pathlib.Path(td) / "w"
         shutil.copytree(ROOT, work, ignore=shutil.ignore_patterns(".git", "__pycache__"))
-        env = dict(os.environ, STACK_SIBLINGS_DIR=os.environ.get("STACK_SIBLINGS_DIR") or str(ROOT.parent))
+        env = dict(os.environ, WARD_SIBLINGS_DIR=os.environ.get("WARD_SIBLINGS_DIR") or str(ROOT.parent))
         if subprocess.run([sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider"], cwd=work,
                           capture_output=True, env=env).returncode:
             print("baseline: the unmutated copy fails its tests; refusing to count mutants")
@@ -107,7 +107,7 @@ def main(argv):
             (work / mod).write_text(code)
             r = subprocess.run([sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider"],
                                cwd=work, capture_output=True,
-                               env=dict(os.environ, STACK_SIBLINGS_DIR=os.environ.get("STACK_SIBLINGS_DIR") or str(ROOT.parent)))
+                               env=dict(os.environ, WARD_SIBLINGS_DIR=os.environ.get("WARD_SIBLINGS_DIR") or str(ROOT.parent)))
             if r.returncode == 0:
                 survivors.append(label)
         (work / mod).write_text(src)

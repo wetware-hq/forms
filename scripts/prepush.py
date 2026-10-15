@@ -24,7 +24,7 @@ def tracked():
 
 def answer_files(paths):
     """Tracked answer files or local settings: never committed."""
-    return [p for p in paths if p.name in ("truth.toml", "patient_wording.md", "stack.local.toml") or "stack_truth" in p.parts]
+    return [p for p in paths if p.name in ("truth.toml", "patient_wording.md", "ward.local.toml") or "stack_truth" in p.parts]
 
 
 def main(argv):
