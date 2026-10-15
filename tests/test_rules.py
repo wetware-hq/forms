@@ -1369,3 +1369,68 @@ def test_review_returns_the_queue_line_it_reviewed():
     want = c.check()["clinician_queue"]
     assert want and want[0].startswith(_signed_by_id("CQ-THREE-FAILS").split("[")[0])
     assert c.step(act("review")) == {"accepted": True, "reviewed": want}
+
+
+# ---------- room ruling 11:52: review never finalises; only the patient or a clinician in person resubmits ----------
+def test_review_never_finalises_a_failed_form():
+    e = env(role="patient_agent", grant=True); fail_n(e, 3)
+    c = as_role(e, "clinician", "medicine")
+    assert c.step(act("review"))["accepted"]
+    out = c.check()
+    assert out["final"] is False and out["checked"] == _signed_by_id("ST-CHECK-FAIL")
+
+
+def test_clinician_agent_resubmit_is_refused_and_nothing_changes():
+    e = env(); fail_n(e, 1)
+    a = as_role(e, "clinician_agent", scope=("medicine",))
+    before_log, before = list(a.log), a.check()
+    assert a.step(act("submit")) == {"accepted": False, "reason": _signed_by_id("RF-CLIN-AGENT")}
+    assert a.log == before_log and a.check() == before and a.check()["checked"] != _signed_by_id("ST-CHECK-PASS")
+
+
+def test_clinician_agent_resubmit_after_review_is_refused():
+    e = env(role="patient_agent", grant=True); fail_n(e, 3)
+    c = as_role(e, "clinician", "medicine"); assert c.step(act("review"))["accepted"]
+    a = as_role(c, "clinician_agent", scope=("medicine",))
+    before_log = list(a.log)
+    assert a.step(act("submit")) == {"accepted": False, "reason": _signed_by_id("RF-CLIN-AGENT")}
+    assert a.log == before_log and a.check()["final"] is False
+
+
+def test_resubmit_that_still_fails_never_reaches_check_pass():
+    e = env(); fail_n(e, 1)
+    r = e.step(act("submit"))
+    assert r["accepted"] and r["final"] is False and r["result"] == _signed_by_id("ST-CHECK-FAIL")
+    assert e.check()["checked"] == _signed_by_id("ST-CHECK-FAIL")
+
+
+@pytest.mark.parametrize("who", ["patient", "clinician"])
+def test_patient_or_clinician_in_person_resubmit_reruns_the_full_check(who):
+    e = env(); fail_n(e, 1); scripted_patient(e)
+    r_env = as_role(e, who, "medicine" if who == "clinician" else None)
+    complete = r_env.check()["complete"]
+    r = r_env.step(act("submit"))
+    assert r["accepted"] and r["final"] is complete
+    assert r["result"] == _signed_by_id("ST-CHECK-PASS" if complete else "ST-CHECK-FAIL")
+
+
+# ---------- PV-RESUBMIT (signed row 125): the resubmit prompt after a clinician review of a failed form ----------
+def _reviewed_failed_with_decline():
+    e = env(); assert e.step(act("decline", "allergy_any"))["accepted"]; fail_n(e, 3)
+    c = as_role(e, "clinician", "medicine"); assert c.step(act("review"))["accepted"]
+    return as_role(c, "patient"), "allergy_any"
+
+
+def test_resubmit_prompt_is_the_signed_line_after_review_only():
+    e = env(); fail_n(e, 3)
+    assert "resubmit" not in e.patient_view()
+    p, _ = _reviewed_failed_with_decline()
+    assert p.patient_view()["resubmit"] == _signed_by_id("PV-RESUBMIT")
+    p.step(act("submit"))
+    assert "resubmit" not in p.patient_view()
+
+
+def test_resubmit_prompt_never_names_the_decline():
+    p, qid = _reviewed_failed_with_decline()
+    line = p.patient_view()["resubmit"]
+    assert qid not in line and p.q[qid]["text"] not in line and "declin" not in line.lower()

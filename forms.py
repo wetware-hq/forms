@@ -172,7 +172,7 @@ class FormEnv:
     def _fold(self):
         st = {i: {"state": "unanswered"} for i in self.ids}
         meta = {"approver": None, "grant": None, "revoked_on": None, "granted_on": None, "grants": {}, "patient": None,
-                "submissions": 0, "fails": 0, "passed": False, "missing": [], "sameday": {}, "closed_sameday": {}}
+                "submissions": 0, "fails": 0, "passed": False, "reviewed": False, "missing": [], "sameday": {}, "closed_sameday": {}}
         for k, e in enumerate(self.log):
             t = e["type"]
             if t == "open":
@@ -185,10 +185,12 @@ class FormEnv:
                 meta["submissions"] += 1
                 meta["passed"] = e["result"] == "pass"
                 meta["fails"] = 0 if meta["passed"] else meta["fails"] + 1
+                meta["reviewed"] = False
                 meta["missing"] = e["missing"]      # a blank question fails the submit; it never queues (S08)
                 continue
             if t == "review":
                 meta["fails"] = 0
+                meta["reviewed"] = not meta["passed"]   # review never finalises; the form waits for a resubmit
                 meta["sameday"] = {}        # only a clinician closes same-day entries
                 continue
             if t in ("grant", "revoke"):
@@ -345,6 +347,8 @@ class FormEnv:
         for key, route in (("sameday", "same_day"), ("before_procedure", "before_procedure")):
             if any(self.route(i) == route and self._applicable(st, i) and self._contact_today(st[i], i, sdm) for i in self.ids):
                 out[key] = msg(ROUTES[route][1])
+        if meta["reviewed"] and meta["submissions"] and not meta["passed"]:
+            out["resubmit"] = msg("PV-RESUBMIT")   # never names a question or a decline (Physician condition)
         nxt = [i for i in self.check()["open"] if st[i]["state"] == "unanswered"]
         out["next"] = msg("PV-NEXT", plain=self.q[nxt[0]]["text"]) if nxt else msg("PV-NOTHING-NEXT")
         return out
@@ -424,6 +428,8 @@ class FormEnv:
             return msg("RF-NOT-APPROVED")
         if meta["passed"]:
             return code("final")
+        if t == "submit" and meta["submissions"] and s.role == "clinician_agent":
+            return msg("RF-CLIN-AGENT")      # a resubmit: only the patient, or a clinician in person (ruling 11:52)
         if s.role in AGENTS and meta["fails"] >= MAX_FAILS:
             return msg("RF-WAIT-CLINICIAN")
         if t == "review":
