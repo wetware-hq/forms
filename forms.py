@@ -19,6 +19,7 @@ PERMS = {
     "patient_agent": {"answer", "submit", "next"},
     "clinician": {"answer", "unknown", "confirm", "approve", "submit", "review", "close_sameday", "next"},
     "clinician_agent": {"answer", "submit", "next"},
+    "guardian": {"answer", "decline", "unknown", "submit", "next"},   # acts for a child under REL-GUARDIAN (S13)
 }
 # ---- per-call permissions: env methods a session may call through call(). reset, replay, check and export
 # belong to the harness and are refused with RF-HARNESS-ONLY. ----
@@ -27,6 +28,7 @@ CALL_PERMS = {
     "patient_agent": {"observe", "step"},
     "clinician": {"observe", "step"},
     "clinician_agent": {"observe", "step"},
+    "guardian": {"observe", "step"},
 }
 # Patient screens never show a machine code: refusal code -> signed patient line id (ids only; wording is in WORDING.md).
 PATIENT_LINE = {"role_fixed_at_session_open": "PV-CARE-TEAM-STEP", "action_type": "PV-TRY-AGAIN", "fields": "PV-TRY-AGAIN", "timestamp": "PV-TRY-AGAIN", "interpreter_clinician_only": "PV-CARE-TEAM-STEP", "final": "PV-ALREADY-FINAL", "on_behalf_clinician_only": "PV-CARE-TEAM-STEP", "nothing_to_confirm": "PV-NOTHING-TO-CONFIRM", "grant_names_agent": "PV-GRANT-NAMES-AGENT",
@@ -35,7 +37,7 @@ PATIENT_LINE = {"role_fixed_at_session_open": "PV-CARE-TEAM-STEP", "action_type"
                 "role_review": "PV-CARE-TEAM-STEP", "role_close_sameday": "PV-CARE-TEAM-STEP"}
 MAX_FAILS = 3   # failed submissions in a row before the episode goes to the clinician queue
 DENY = {"patient": None, "patient_agent": "RF-ROLE-CONFIRM", "clinician": "RF-ROLE-CONFIRM",
-        "clinician_agent": "RF-CLIN-AGENT"}
+        "clinician_agent": "RF-CLIN-AGENT", "guardian": None}
 CONFIRMER = {"patient": "patient", "clinician": "clinician"}   # audience -> who confirms an agent's answer
 SCOPED = {"clinician", "clinician_agent"}                        # roles checked against scope of practice
 FIELDS = {"answer": {"question_id", "value"}, "decline": {"question_id"}, "unknown": {"question_id"}, "confirm": {"question_id"},
@@ -172,7 +174,7 @@ class FormEnv:
     def _fold(self):
         st = {i: {"state": "unanswered"} for i in self.ids}
         meta = {"approver": None, "grant": None, "revoked_on": None, "granted_on": None, "grants": {}, "patient": None,
-                "submissions": 0, "fails": 0, "passed": False, "reviewed": False, "missing": [], "sameday": {}, "closed_sameday": {}}
+                "submissions": 0, "fails": 0, "passed": False, "missing": [], "sameday": {}, "closed_sameday": {}}
         for k, e in enumerate(self.log):
             t = e["type"]
             if t == "open":
@@ -347,7 +349,7 @@ class FormEnv:
         for key, route in (("sameday", "same_day"), ("before_procedure", "before_procedure")):
             if any(self.route(i) == route and self._applicable(st, i) and self._contact_today(st[i], i, sdm) for i in self.ids):
                 out[key] = msg(ROUTES[route][1])
-        if meta["reviewed"] and meta["submissions"] and not meta["passed"]:
+        if meta.get("reviewed") and not meta["passed"]:
             out["resubmit"] = msg("PV-RESUBMIT")   # never names a question or a decline (Physician condition)
         nxt = [i for i in self.check()["open"] if st[i]["state"] == "unanswered"]
         out["next"] = msg("PV-NEXT", plain=self.q[nxt[0]]["text"]) if nxt else msg("PV-NOTHING-NEXT")
@@ -414,6 +416,8 @@ class FormEnv:
         if t not in PERMS[s.role]:
             if s.role == "patient_agent" and self.schema["audience"] != "patient":
                 return msg("RF-AGENT-CLIN-FORM")
+            if s.role == "guardian" and "role_" + t not in PATIENT_LINE:
+                return msg("RF-NOT-YOURS")            # confirm, grant, revoke: the child's own steps, not the guardian's
             return msg(DENY[s.role]) if DENY[s.role] else code("role_" + t)
         try:
             datetime.datetime.fromisoformat(e["timestamp"])
@@ -468,7 +472,9 @@ class FormEnv:
             return code("interpreter_clinician_only")
         if "interpreter" in e and type(e["interpreter"]) is not bool:
             return msg("RF-NOT-BOOL")
-        if "on_behalf" in e and s.role != "clinician":
+        if t == "answer" and s.role == "guardian" and e.get("on_behalf") != "guardian":
+            return msg("ER-BAD-FIELD", field="on_behalf", item="answer")   # a guardian answers only as guardian
+        if "on_behalf" in e and s.role not in ("clinician", "guardian"):
             return code("on_behalf_clinician_only")
         if "on_behalf" in e and e["on_behalf"] not in RELATIONSHIP:
             return msg("ER-BAD-FIELD", field="on_behalf", item="answer")
@@ -488,6 +494,8 @@ class FormEnv:
         if a["type"] == "submit":
             c = self.check()
             e.update(result="pass" if c["complete"] else "fail", missing=c["open"])
+        if a["type"] == "answer" and s.role == "guardian":
+            e.setdefault("on_behalf", "guardian")     # role-derived, like the role itself: fixed at session open
         if a.get("question_id") in self.q:
             e["question_version"] = self.q[a["question_id"]]["version"]
         return e
@@ -522,7 +530,7 @@ class FormEnv:
 
     def _refuse(self, why):
         """Every refusal carries a line id or a machine code; never an empty reason."""
-        if self.session.role == "patient":
+        if self.session.role in ("patient", "guardian"):     # patient-side people never see a machine code
             why = msg(PATIENT_LINE[why[4:]]) if why.startswith("ERR:") and why[4:] in PATIENT_LINE else why
         return {"accepted": False, "reason": why}
 

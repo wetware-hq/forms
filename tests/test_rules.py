@@ -238,14 +238,17 @@ def test_roles_are_four_with_discipline():
         open_session("SYNTH-c", "clinician")
     with pytest.raises(Invalid):
         open_session("SYNTH-a", "clinician_agent")
-    assert F.PERMS.keys() == {"patient", "patient_agent", "clinician", "clinician_agent"}
+    assert F.PERMS.keys() == {"patient", "patient_agent", "clinician", "clinician_agent", "guardian"}
+    with pytest.raises(Invalid):
+        open_session("SYNTH-g", "guardian", "medicine")      # a guardian is no clinician
 
 def test_permissions_table_by_role():
     assert F.PERMS == {
         "patient": {"answer", "decline", "unknown", "confirm", "grant", "revoke", "submit", "next"},
         "patient_agent": {"answer", "submit", "next"},
         "clinician": {"answer", "unknown", "confirm", "approve", "submit", "review", "close_sameday", "next"},
-        "clinician_agent": {"answer", "submit", "next"}}
+        "clinician_agent": {"answer", "submit", "next"},
+        "guardian": {"answer", "decline", "unknown", "submit", "next"}}
     for role, allowed in F.PERMS.items():
         assert allowed <= set(F.FIELDS) | {"next"} and role in F.DENY
     assert "approve" in F.PERMS["clinician"] and "approve" not in F.PERMS["clinician_agent"]
@@ -554,7 +557,7 @@ def fail_n(e, n):
         r = e.step(act("submit")); assert r["accepted"] and r["final"] is False
 
 def test_r5_01_call_permissions_table():
-    assert F.CALL_PERMS == {r: {"observe", "step"} for r in ("patient", "patient_agent", "clinician", "clinician_agent")}
+    assert F.CALL_PERMS == {r: {"observe", "step"} for r in ("patient", "patient_agent", "clinician", "clinician_agent", "guardian")}
 
 @pytest.mark.parametrize("role,kw", [("patient_agent", {"grant": True}), ("clinician_agent", {"scope": ("medicine",)}),
                                      ("patient", {}), ("clinician", {"discipline": "medicine"})])
@@ -1434,3 +1437,50 @@ def test_resubmit_prompt_never_names_the_decline():
     p, qid = _reviewed_failed_with_decline()
     line = p.patient_view()["resubmit"]
     assert qid not in line and p.q[qid]["text"] not in line and "declin" not in line.lower()
+
+
+# ---------- guardian session role (S13): a person acting for a child under REL-GUARDIAN ----------
+GUARD = "SYNTH-PERSON-G13"
+
+
+def g_env():
+    e = F.FormEnv(); e.reset(PH, GUARD, "guardian", EP); e.replay(approval(PH))
+    return e
+
+
+def test_guardian_answer_is_recorded_on_behalf_and_shown_with_the_signed_relationship():
+    e = g_env()
+    assert e.step(dict(ans("allergy_any", False), on_behalf="guardian"))["accepted"]
+    s = e._fold()[0]["allergy_any"]
+    assert s["source"] == "guardian" and s["on_behalf"] == "guardian" and s["confirmed"] is True
+    sig = _signed_by_id("PV-ANS-SDM").split("[relationship]")
+    v = e.patient_view()["allergy_any"]
+    assert v.startswith(_signed_by_id("REL-GUARDIAN-PT") + sig[1].split("[date]")[0])
+
+
+def test_guardian_must_answer_as_guardian():
+    e = g_env()
+    r = e.step(dict(ans("allergy_any", False), on_behalf="parent"))
+    assert r == {"accepted": False, "reason": _signed_by_id("ER-BAD-FIELD").replace("[field]", "on_behalf").replace("[item]", "answer")}
+    assert e.log == g_env().log
+    assert e.step(ans("allergy_any", False))["accepted"] and e.log[-1]["on_behalf"] == "guardian"
+
+
+@pytest.mark.parametrize("t", ["approve", "review", "confirm", "grant", "close_sameday"])
+def test_guardian_cannot_take_clinician_or_patient_only_steps(t):
+    e = g_env()
+    a = {"approve": act("approve"), "review": act("review"), "confirm": act("confirm", "allergy_any"),
+         "grant": grant_ev(patient=GUARD), "close_sameday": dict(act("close_sameday", "allergy_any"), status="confirmed")}[t]
+    assert not e.step(a)["accepted"] and e.log == g_env().log
+
+
+def test_guardian_can_decline_submit_and_resubmit():
+    e = g_env()
+    assert e.step(act("decline", "allergy_any"))["accepted"] and e.step(act("submit"))["accepted"]
+
+
+@pytest.mark.parametrize("a", [act("approve"), act("review"), act("confirm", "allergy_any"), {"type": "nope", "timestamp": TS}])
+def test_guardian_screen_never_shows_a_machine_code(a):
+    r = g_env().step(a)
+    assert not r["accepted"] and not r["reason"].startswith("ERR:") and r["reason"] in set(__import__("messages").LINES.values()) | {
+        _signed_by_id(v) for v in F.PATIENT_LINE.values()}

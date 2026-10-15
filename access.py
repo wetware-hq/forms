@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from messages import msg
 
-ROLES = ("patient", "patient_agent", "clinician", "clinician_agent")
+ROLES = ("patient", "patient_agent", "clinician", "clinician_agent", "guardian")
 AGENTS = ("patient_agent", "clinician_agent")
 
 
