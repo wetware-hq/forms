@@ -1,5 +1,6 @@
 """Static check: every refusal code the gate or step can raise, read from the source with ast (not a sweep).
 Each code a patient session can reach must map to a signed PV line in PATIENT_LINE; an unmapped code fails."""
+from signed_source import signed_rows as _signed_rows
 import ast, pathlib, sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -43,6 +44,9 @@ def test_every_patient_reachable_code_has_a_signed_pv_line():
     codes = raised_codes((ROOT / "forms.py").read_text())
     assert "role_fixed_at_session_open" in codes and len(codes) > 5
     assert unmapped(codes, M.PATIENT_LINE) == []
+    signed = _signed_rows()
+    assert all(M.PATIENT_LINE[c] in signed and messages.LINES[M.PATIENT_LINE[c]] == signed[M.PATIENT_LINE[c]]
+               for c in codes if c in M.PATIENT_LINE)
 
 
 def test_static_check_fails_on_an_unmapped_code():
