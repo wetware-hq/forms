@@ -8,7 +8,7 @@ import sync_wording
 
 # Committed row count of forms_orders_lines_SIGNED.md (room ruling 09:51). Changed in the same commit as the signed
 # file changes: the test compares the count read off the file with this number.
-SIGNED_ROW_COUNT = 128
+SIGNED_ROW_COUNT = 131
 
 
 def test_every_wording_line_matches_signed_source():
