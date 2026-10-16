@@ -113,7 +113,7 @@ python3 -m pytest -q
 
 Contributors run pytest and `scripts/rulecheck.py` before every commit. Agent rules are in [AGENTS.md](AGENTS.md).
 
-## Status
+## Planned
 
 An MCP server is planned. There isn't one yet. All lines in `WORDING.md` are signed. Lines still waiting for signature are in `messages.PENDING` (draft: `WORDING_PENDING.md`); `CQ-SAMEDAY-ALERT` is a placeholder until it is drafted.
 
