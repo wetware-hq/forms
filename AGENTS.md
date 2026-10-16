@@ -1,7 +1,7 @@
 ---
 schema: wetware.agent.v1
 resource: forms
-version: 0.1.0
+version: 0.2.0
 capabilities: [questionnaire, checkpoint]
 inputs:
   form: {type: toml, constraint: "strict yes/no questions; approved version only"}
@@ -11,6 +11,12 @@ outputs:
   status: {type: screen, values: [complete, not yet, invalid]}
   export: {type: json, fields: [answers, given_by, bitsets]}
   exit: {type: int}
+interface:
+  agent: [FormEnv.call observe, FormEnv.call step]
+  harness_only: [reset, replay, check, export]
+roles: [patient, patient_agent, clinician, clinician_agent]
+settings: [WARD_SIBLINGS_DIR, TEST_SEED]
+used_by: {repo: wetware-hq/ward, layer: middleware}
 ---
 
 # Agent contract
@@ -22,6 +28,7 @@ Normative rules for agents that operate or modify forms. Wording uses RFC 2119: 
 1. All data **MUST** be synthetic: `SYNTH-` ids, dates from 1930 to 1939, made-up people. Removing a name does not make a record synthetic.
 2. If a user pastes real patient data, the agent **MUST** stop, **MUST NOT** repeat or process it, and **MUST** tell the user to report a privacy incident.
 3. Fixtures, examples and test logs **MUST** follow rule 1.
+4. Signed wording and answer folders under `WARD_SIBLINGS_DIR` are read-only; held-out folders **MUST NOT** be opened.
 
 ## Operating the environment
 
@@ -47,5 +54,6 @@ Normative rules for agents that operate or modify forms. Wording uses RFC 2119: 
 
 ## Out of scope
 
+- Signing wording or rules, or writing answer files
 - Real patient data, hosted services or vendor APIs
 - Clinical advice or deciding what an answer or job means
