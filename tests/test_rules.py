@@ -57,7 +57,7 @@ def scripted_patient(e):
     while (q := e.step({"type": "next"})["next"]):
         assert e.step(ans(q, script[q]) if q in script else act("decline", q))["accepted"]
 
-# ---------- signed rules (Mathew, earlier rounds) ----------
+# ---------- signed rules (earlier rounds) ----------
 def test_question_fields_required():
     for k in ("id", "version", "text", "safety_critical", "clinician_must_confirm"):
         assert bad_schema(lambda d: d["question"][0].pop(k)) == msg("ER-BAD-FIELD", field=k, item="question 1")
@@ -224,7 +224,7 @@ def test_two_items_refused_unless_flagged_to_queue(tmp_path):
     assert F.main(["f", "build", str(p)]) == 0
     assert (tmp_path / "s.toml.clinician_queue.txt").read_text().strip() == msg("CQ-TWO-ITEMS", n=4)
 
-# ---------- generality (Mathew) ----------
+# ---------- generality (owner ruling) ----------
 def test_roles_are_four_with_discipline():
     for args in (("clinician", "  "), ("patient", "medicine"), ("clinician_agent", None, ("",)),
                  ("patient", None, ("medicine",)), ("clinician", 3)):
