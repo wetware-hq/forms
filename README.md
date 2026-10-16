@@ -4,9 +4,25 @@ forms - a checkpoint for clinical questionnaires: strict yes/no questions, fille
 
 > Example data is synthetic (`SYNTH-` ids, 1930s dates, made-up people). forms is a research prototype. It is not a medical device and has not been approved for use with real patient data.
 
+---
+
+## Clinical abstract
+
+Questionnaires before a clinic visit or a procedure are often the first place a safety problem shows up: an allergy, a blood thinner, a low mood. On paper or in a loose web form, a blank is easily read as "no", a decline vanishes, and an assistant's guess can look like the patient's own answer.
+
+forms treats each questionnaire as a checkpoint. Every question is a plain yes/no. The patient, a clinician, or an assistant acting for one of them answers it; an assistant's answer stays provisional until the right person confirms it. A yes, a decline or an unknown on a safety-critical question opens a same-day (or before-procedure) entry for a clinician, and the form cannot pass until a clinician has looked at it. Nothing is ever overwritten: every answer and correction is kept in order, so the record can be replayed and checked.
+
+What the clinician sees: complete, not yet, or invalid, with the reason, and a queue of items needing review. What forms is not: it gives no clinical advice, does not interpret answers, is not a medical device, and runs on synthetic data only.
+
+---
+
 ## Purpose
 
 forms runs yes/no questionnaires as an agentic environment. It works in any clinical setting: medicine, nursing, allied health, and forms that patients fill in themselves. Each question must be answered true or false, declined, or skipped by a stated condition. Nothing passes the checkpoint until every applicable answer is in and confirmed by the right person. forms does not give clinical advice and does not decide what an answer means; it records answers and refuses anything the rules don't allow.
+
+## Engineering specification
+
+System: one questionnaire environment over an append-only JSONL log. Actors reach it through `observe` and `step`; `reset`, `replay`, `check` and `export` are harness-only. Settings read: `WARD_SIBLINGS_DIR` (signed wording folder), `TEST_SEED` (test order). Standard library only, Python 3.11+.
 
 ## Model
 
