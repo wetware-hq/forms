@@ -111,7 +111,7 @@ The tests check `WORDING.md` against its header hash and check that every line i
 python3 -m pytest -q
 ```
 
-Contributors run pytest and `scripts/rulecheck.py` before every commit. Agent rules are in [AGENTS.md](AGENTS.md).
+Contributors run pytest and `scripts/rulecheck.py` before every commit. Agent rules are in [AGENTS.md](AGENTS.md). What a green covers and what it does not — so a green here is not read as the same assurance as a green elsewhere — is [BAR.md](BAR.md).
 
 ## Planned
 
