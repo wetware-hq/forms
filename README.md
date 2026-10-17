@@ -128,3 +128,15 @@ S05 and S07 were checked with a scripted stand-in, not a real AI model. The scri
 ## Status
 
 Not for use with real patients.
+
+## References
+
+forms makes no biological or clinical claim. It runs yes/no questionnaires as an append-only log and refuses what the rules don't allow, so nothing it does rests on a measured result in the literature. Entries are tied to the one claim that rests on them; nothing merely adjacent is listed, and anything listed carries a DOI, PMID or arXiv id.
+
+### Peer-reviewed
+
+- None. forms records answers and confirmations and decides nothing clinical, so there is no measured finding it depends on. A paper here would be adjacent reading dressed up as evidence, left out on purpose rather than to hide a gap.
+
+### Unsupported claims (no peer-reviewed support)
+
+- Every claim forms makes — that a blank is never read as "no", that a decline is never read as "no", and that an assistant's answer stays provisional until the right person confirms it — is shown by its own rules and tests, not by peer-reviewed research. A green is the checkpoint behaving as written on synthetic data, nothing about real care.
